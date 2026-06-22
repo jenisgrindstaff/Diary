@@ -44,7 +44,7 @@ func (s *Server) handleCreateEntryAPI(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, publicMessage(err))
 		return
 	}
-	if err := s.Reindex(); err != nil {
+	if err := s.indexEntry(entry.VaultPath); err != nil {
 		writeError(w, http.StatusInternalServerError, publicMessage(err))
 		return
 	}
@@ -92,7 +92,7 @@ func (s *Server) handleUpdateEntryAPI(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, publicMessage(err))
 		return
 	}
-	if err := s.Reindex(); err != nil {
+	if err := s.indexEntry(updated.VaultPath); err != nil {
 		writeError(w, http.StatusInternalServerError, publicMessage(err))
 		return
 	}
@@ -114,7 +114,7 @@ func (s *Server) handleTrashEntryAPI(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, publicMessage(err))
 		return
 	}
-	if err := s.Reindex(); err != nil {
+	if err := s.store.IndexDeletion(tombstone); err != nil {
 		writeError(w, http.StatusInternalServerError, publicMessage(err))
 		return
 	}
@@ -147,7 +147,7 @@ func (s *Server) handleAttachMediaAPI(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, publicMessage(err))
 		return
 	}
-	if err := s.Reindex(); err != nil {
+	if err := s.indexEntry(updated.VaultPath); err != nil {
 		writeError(w, http.StatusInternalServerError, publicMessage(err))
 		return
 	}
@@ -171,7 +171,7 @@ func (s *Server) handleRemoveMediaAPI(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, publicMessage(err))
 		return
 	}
-	if err := s.Reindex(); err != nil {
+	if err := s.indexEntry(updated.VaultPath); err != nil {
 		writeError(w, http.StatusInternalServerError, publicMessage(err))
 		return
 	}

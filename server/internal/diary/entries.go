@@ -95,11 +95,36 @@ func CreateEntry(vaultDir string, input CreateEntryInput) (Entry, error) {
 	if err != nil {
 		return Entry{}, err
 	}
-	if err := os.WriteFile(entry.VaultPath, data, 0o644); err != nil {
+	if err := writeEntryFile(entry.VaultPath, data); err != nil {
 		return Entry{}, err
 	}
 
 	return entry, nil
+}
+
+// writeEntryFile writes entry markdown atomically: it writes to a temp file in
+// the same directory and renames it into place, so a crash or concurrent write
+// mid-update can't leave a truncated entry on disk.
+func writeEntryFile(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".entry-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		_ = os.Remove(tmpName)
+		return err
+	}
+	return nil
 }
 
 func UpdateEntry(vaultDir string, existing Entry, input UpdateEntryInput) (Entry, error) {
@@ -163,11 +188,13 @@ func UpdateEntry(vaultDir string, existing Entry, input UpdateEntryInput) (Entry
 	if err != nil {
 		return Entry{}, err
 	}
-	if err := os.WriteFile(newPath, data, 0o644); err != nil {
+	if err := writeEntryFile(newPath, data); err != nil {
 		return Entry{}, err
 	}
 	if oldPath != newPath {
-		_ = os.Remove(oldPath)
+		if err := os.Remove(oldPath); err != nil && !os.IsNotExist(err) {
+			return Entry{}, err
+		}
 	}
 
 	return entry, nil
@@ -199,7 +226,9 @@ func TrashEntry(vaultDir string, entry Entry, now time.Time) (Tombstone, error) 
 		TrashPath:  destination,
 	}
 	if err := WriteTombstone(vaultDir, tombstone); err != nil {
-		_ = os.Rename(destination, entry.VaultPath)
+		if restoreErr := os.Rename(destination, entry.VaultPath); restoreErr != nil {
+			return Tombstone{}, fmt.Errorf("tombstone write failed (%w) and entry could not be restored from trash at %s: %v", err, destination, restoreErr)
+		}
 		return Tombstone{}, err
 	}
 

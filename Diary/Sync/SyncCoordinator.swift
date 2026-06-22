@@ -38,14 +38,32 @@ final class SyncCoordinator {
 
             try await flushPendingChanges(checkpoint: checkpoint, client: client, modelContext: modelContext)
 
-            let envelope = try await client.fetchEntries(updatedSince: checkpoint.cursor)
-            try SyncImporter.apply(envelope: envelope, checkpoint: checkpoint, modelContext: modelContext)
-            try await cacheAttachments(from: envelope, client: client, modelContext: modelContext)
+            // The server paginates entries; drain pages until has_more is false.
+            // Each page advances checkpoint.cursor (via SyncImporter.apply), so a
+            // failure mid-drain resumes from the last applied page next sync.
+            var entryCount = 0
+            var deletedCount = 0
+            while true {
+                let envelope = try await client.fetchEntries(updatedSince: checkpoint.cursor)
+                let previousCursor = checkpoint.cursor
+                try SyncImporter.apply(envelope: envelope, checkpoint: checkpoint, modelContext: modelContext)
+                try await cacheAttachments(from: envelope, client: client, modelContext: modelContext)
+                entryCount += envelope.entries.count
+                deletedCount += envelope.deletedEntryIDs.count
+
+                guard envelope.hasMore else { break }
+                // Defensive: the server guarantees the cursor advances while
+                // has_more is true; stop rather than loop forever if it does not.
+                if checkpoint.cursor == previousCursor {
+                    break
+                }
+            }
+
             recordEvent(
                 kind: .fullSync,
                 status: .succeeded,
                 summary: "Sync completed",
-                detail: syncSummary(entryCount: envelope.entries.count, deletedCount: envelope.deletedEntryIDs.count),
+                detail: syncSummary(entryCount: entryCount, deletedCount: deletedCount),
                 modelContext: modelContext
             )
 
@@ -514,6 +532,8 @@ final class SyncCoordinator {
             let removeResponse = try await client.removeMedia(id: attachmentID, from: latestEntry.id)
             latestEntry = removeResponse.entry
             try await importEntry(latestEntry, checkpoint: checkpoint, client: client, modelContext: modelContext)
+            // The server confirmed removal, so the cached file is now dead weight.
+            mediaStore.removeAttachment(attachmentID: attachmentID)
         }
 
         for mediaItem in payload.media {
@@ -565,6 +585,7 @@ final class SyncCoordinator {
             modelContext: modelContext,
             syncedAt: response.deletedAt
         )
+        purgeLocalMedia(forEntryID: response.deletedEntryID, modelContext: modelContext)
 
         modelContext.delete(change)
         try modelContext.save()
@@ -589,6 +610,7 @@ final class SyncCoordinator {
         }
 
         if let entry = try entry(id: id, modelContext: modelContext) {
+            purgeLocalMedia(forEntryID: id, modelContext: modelContext)
             modelContext.delete(entry)
         }
 
@@ -605,6 +627,7 @@ final class SyncCoordinator {
 
     private func completeDeleteAlreadyAbsent(change: PendingChange, modelContext: ModelContext) throws {
         if let entry = try entry(id: change.entryID, modelContext: modelContext) {
+            purgeLocalMedia(forEntryID: change.entryID, modelContext: modelContext)
             modelContext.delete(entry)
         }
 
@@ -636,6 +659,7 @@ final class SyncCoordinator {
         client: SyncClient,
         modelContext: ModelContext
     ) async throws {
+        var failedDownloads = 0
         for entry in envelope.entries {
             for attachmentDTO in entry.attachments {
                 let relativePath = mediaStore.relativePath(attachmentID: attachmentDTO.id, filename: attachmentDTO.filename)
@@ -649,12 +673,36 @@ final class SyncCoordinator {
                     try mediaStore.save(data: data, relativePath: relativePath)
                     try updateAttachment(id: attachmentDTO.id, localRelativePath: relativePath, modelContext: modelContext)
                 } catch {
+                    // The save is atomic, so no partial file is left behind, and
+                    // the missing file is retried on the next sync. Surface a
+                    // count rather than failing silently with a stuck placeholder.
+                    failedDownloads += 1
                     continue
                 }
             }
         }
 
+        if failedDownloads > 0 {
+            recordEvent(
+                kind: .fullSync,
+                status: .failed,
+                summary: "Some media did not download",
+                detail: "\(failedDownloads) attachment\(failedDownloads == 1 ? "" : "s") could not be downloaded and will retry on the next sync.",
+                modelContext: modelContext
+            )
+        }
+
         try modelContext.save()
+    }
+
+    /// Deletes the cached media files for every attachment of an entry. Called
+    /// when an entry is permanently removed or its deletion is confirmed by the
+    /// server, so cached images/videos don't accumulate on disk indefinitely.
+    private func purgeLocalMedia(forEntryID id: String, modelContext: ModelContext) {
+        guard let entry = try? entry(id: id, modelContext: modelContext) else { return }
+        for attachment in entry.attachments {
+            mediaStore.removeAttachment(attachmentID: attachment.id)
+        }
     }
 
     private func updateAttachment(id: String, localRelativePath: String, modelContext: ModelContext) throws {

@@ -434,6 +434,66 @@ func TestTrashEntryAPI(t *testing.T) {
 	}
 }
 
+// TestSearchReflectsIncrementalWrites verifies that the FTS index stays
+// consistent through the incremental create/trash paths (no full reindex):
+// a newly created entry is searchable, and a trashed one stops matching.
+func TestSearchReflectsIncrementalWrites(t *testing.T) {
+	srv := testServerWithImport(t)
+	defer srv.Close()
+
+	body := bytes.NewBufferString(`{
+		"date": "2026-07-01",
+		"body_markdown": "* A zephyrwombat appeared today."
+	}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/entries", body)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create status %d body %s", rec.Code, rec.Body.String())
+	}
+	var created struct {
+		Entry diary.Entry `json:"entry"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+
+	search := func() int {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/search?q=zephyrwombat", nil)
+		r.Header.Set("Authorization", "Bearer secret")
+		w := httptest.NewRecorder()
+		srv.Routes().ServeHTTP(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("search status %d body %s", w.Code, w.Body.String())
+		}
+		var payload struct {
+			Entries []diary.Entry `json:"entries"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+			t.Fatal(err)
+		}
+		return len(payload.Entries)
+	}
+
+	if got := search(); got != 1 {
+		t.Fatalf("expected new entry to be searchable, got %d hits", got)
+	}
+
+	delReq := httptest.NewRequest(http.MethodDelete, "/api/v1/entries/"+created.Entry.ID, nil)
+	delReq.Header.Set("Authorization", "Bearer secret")
+	delRec := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(delRec, delReq)
+	if delRec.Code != http.StatusOK {
+		t.Fatalf("delete status %d body %s", delRec.Code, delRec.Body.String())
+	}
+
+	if got := search(); got != 0 {
+		t.Fatalf("expected trashed entry to drop out of search, got %d hits", got)
+	}
+}
+
 func TestHomeRendersImportedEntries(t *testing.T) {
 	srv := testServerWithImport(t)
 	defer srv.Close()

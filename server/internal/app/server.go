@@ -89,6 +89,17 @@ func (s *Server) Reindex() error {
 	return s.store.ReplaceIndex(entries, tombstones)
 }
 
+// indexEntry re-reads a single entry file from disk and upserts it into the
+// index. Used by the per-entry write paths instead of a full Reindex, so one
+// mutation does O(1) work rather than re-reading the whole vault.
+func (s *Server) indexEntry(path string) error {
+	entry, err := diary.ReadEntry(s.cfg.VaultDir, path)
+	if err != nil {
+		return err
+	}
+	return s.store.IndexEntry(entry)
+}
+
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
 }

@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"diary/server/internal/diary"
@@ -97,7 +98,11 @@ VALUES (?, ?, ?, ?)`,
 	return err
 }
 
-func scanEntries(rows *sql.Rows, attachments func(string) ([]diary.Attachment, error)) ([]diary.Entry, error) {
+// loadAttachments fetches attachments for many entries at once, keyed by entry
+// id, so callers avoid issuing one query per entry (the former N+1 pattern).
+type loadAttachments func(entryIDs []string) (map[string][]diary.Attachment, error)
+
+func scanEntries(rows *sql.Rows, attachments loadAttachments) ([]diary.Entry, error) {
 	entries := []diary.Entry{}
 	for rows.Next() {
 		entry, err := scanEntry(rows)
@@ -114,18 +119,22 @@ func scanEntries(rows *sql.Rows, attachments func(string) ([]diary.Attachment, e
 		return nil, err
 	}
 
+	ids := make([]string, len(entries))
 	for i := range entries {
-		entryAttachments, err := attachments(entries[i].ID)
-		if err != nil {
-			return nil, err
-		}
-		entries[i].Attachments = entryAttachments
+		ids[i] = entries[i].ID
+	}
+	byEntry, err := attachments(ids)
+	if err != nil {
+		return nil, err
+	}
+	for i := range entries {
+		entries[i].Attachments = attachmentsOrEmpty(byEntry[entries[i].ID])
 	}
 
 	return entries, nil
 }
 
-func scanSearchResults(rows *sql.Rows, attachments func(string) ([]diary.Attachment, error)) ([]SearchResult, error) {
+func scanSearchResults(rows *sql.Rows, attachments loadAttachments) ([]SearchResult, error) {
 	results := []SearchResult{}
 	for rows.Next() {
 		result, err := scanSearchResult(rows)
@@ -142,15 +151,39 @@ func scanSearchResults(rows *sql.Rows, attachments func(string) ([]diary.Attachm
 		return nil, err
 	}
 
+	ids := make([]string, len(results))
 	for i := range results {
-		entryAttachments, err := attachments(results[i].Entry.ID)
-		if err != nil {
-			return nil, err
-		}
-		results[i].Entry.Attachments = entryAttachments
+		ids[i] = results[i].Entry.ID
+	}
+	byEntry, err := attachments(ids)
+	if err != nil {
+		return nil, err
+	}
+	for i := range results {
+		results[i].Entry.Attachments = attachmentsOrEmpty(byEntry[results[i].Entry.ID])
 	}
 
 	return results, nil
+}
+
+func attachmentsOrEmpty(values []diary.Attachment) []diary.Attachment {
+	if values == nil {
+		return []diary.Attachment{}
+	}
+	return values
+}
+
+func deleteEntryRows(tx *sql.Tx, id string) error {
+	if _, err := tx.Exec(`DELETE FROM entries_fts WHERE id = ?`, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM attachments WHERE entry_id = ?`, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM entries WHERE id = ?`, id); err != nil {
+		return err
+	}
+	return nil
 }
 
 func scanEntry(row rowScanner) (diary.Entry, error) {
@@ -217,30 +250,46 @@ func scanSearchResult(row rowScanner) (SearchResult, error) {
 	return SearchResult{Entry: entry, Snippet: snippet}, nil
 }
 
-func (s *Store) attachmentsForEntry(entryID string) ([]diary.Attachment, error) {
+func (s *Store) attachmentsForEntries(entryIDs []string) (map[string][]diary.Attachment, error) {
+	byEntry := make(map[string][]diary.Attachment, len(entryIDs))
+	if len(entryIDs) == 0 {
+		return byEntry, nil
+	}
+
+	placeholders := make([]string, len(entryIDs))
+	args := make([]any, len(entryIDs))
+	for i, id := range entryIDs {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+
 	rows, err := s.db.Query(`
 SELECT id, entry_id, kind, filename, content_type, remote_path, markdown_path, absolute_path, byte_count, width, height, created_at
 FROM attachments
-WHERE entry_id = ?
-ORDER BY filename`, entryID)
+WHERE entry_id IN (`+strings.Join(placeholders, ", ")+`)
+ORDER BY entry_id, filename`, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	attachments := []diary.Attachment{}
 	for rows.Next() {
-		attachment, err := scanAttachment(rows)
+		entryID, attachment, err := scanAttachmentRow(rows)
 		if err != nil {
 			return nil, err
 		}
-		attachments = append(attachments, attachment)
+		byEntry[entryID] = append(byEntry[entryID], attachment)
 	}
 
-	return attachments, rows.Err()
+	return byEntry, rows.Err()
 }
 
 func scanAttachment(row rowScanner) (diary.Attachment, error) {
+	_, attachment, err := scanAttachmentRow(row)
+	return attachment, err
+}
+
+func scanAttachmentRow(row rowScanner) (string, diary.Attachment, error) {
 	var attachment diary.Attachment
 	var entryID string
 	var createdAt sql.NullString
@@ -258,7 +307,7 @@ func scanAttachment(row rowScanner) (diary.Attachment, error) {
 		&attachment.Height,
 		&createdAt,
 	); err != nil {
-		return diary.Attachment{}, err
+		return "", diary.Attachment{}, err
 	}
 
 	if createdAt.Valid {
@@ -267,7 +316,7 @@ func scanAttachment(row rowScanner) (diary.Attachment, error) {
 		}
 	}
 
-	return attachment, nil
+	return entryID, attachment, nil
 }
 
 func scanTombstone(row rowScanner) (diary.Tombstone, error) {

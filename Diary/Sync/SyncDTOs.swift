@@ -4,11 +4,29 @@ struct EntrySyncEnvelope: Decodable, Sendable {
     let entries: [EntryDTO]
     let deletedEntryIDs: [String]
     let nextCursor: String?
+    let hasMore: Bool
+
+    init(entries: [EntryDTO], deletedEntryIDs: [String], nextCursor: String?, hasMore: Bool = false) {
+        self.entries = entries
+        self.deletedEntryIDs = deletedEntryIDs
+        self.nextCursor = nextCursor
+        self.hasMore = hasMore
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        entries = try container.decodeIfPresent([EntryDTO].self, forKey: .entries) ?? []
+        deletedEntryIDs = try container.decodeIfPresent([String].self, forKey: .deletedEntryIDs) ?? []
+        nextCursor = try container.decodeIfPresent(String.self, forKey: .nextCursor)
+        // Absent on older servers that returned a single unpaginated response.
+        hasMore = try container.decodeIfPresent(Bool.self, forKey: .hasMore) ?? false
+    }
 
     private enum CodingKeys: String, CodingKey {
         case entries
         case deletedEntryIDs = "deleted_entry_ids"
         case nextCursor = "next_cursor"
+        case hasMore = "has_more"
     }
 }
 

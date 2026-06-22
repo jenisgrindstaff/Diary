@@ -60,6 +60,24 @@ final class SyncDTOTests: XCTestCase {
         XCTAssertEqual(envelope.entries.first?.id, "entry-1")
         XCTAssertEqual(envelope.deletedEntryIDs, ["entry-2"])
         XCTAssertEqual(envelope.nextCursor, "2026-06-22T13:44:00.48969Z")
+        // Absent has_more (older servers) must default to false so the client
+        // does not loop forever.
+        XCTAssertFalse(envelope.hasMore)
+    }
+
+    func testDecodesEntryEnvelopeHasMoreFlag() throws {
+        let json = """
+        {
+          "entries": [],
+          "deleted_entry_ids": [],
+          "next_cursor": "2026-06-22T13:44:00.48969Z",
+          "has_more": true
+        }
+        """.data(using: .utf8)!
+
+        let envelope = try makeDecoder().decode(EntrySyncEnvelope.self, from: json)
+
+        XCTAssertTrue(envelope.hasMore)
     }
 
     func testDecodesSearchEntriesResponseFromServerJSON() throws {

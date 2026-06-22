@@ -193,7 +193,7 @@ func (s *Server) handleCreateEntry(w http.ResponseWriter, r *http.Request) {
 		_ = pageTemplate.ExecuteTemplate(w, "entryForm", data)
 		return
 	}
-	if err := s.Reindex(); err != nil {
+	if err := s.indexEntry(entry.VaultPath); err != nil {
 		data.Message = "Reindex failed: " + publicMessage(err)
 		w.WriteHeader(http.StatusInternalServerError)
 		_ = pageTemplate.ExecuteTemplate(w, "entryForm", data)
@@ -268,7 +268,7 @@ func (s *Server) handleUpdateEntry(w http.ResponseWriter, r *http.Request) {
 		_ = pageTemplate.ExecuteTemplate(w, "entryForm", data)
 		return
 	}
-	if err := s.Reindex(); err != nil {
+	if err := s.indexEntry(updated.VaultPath); err != nil {
 		data.Message = "Reindex failed: " + publicMessage(err)
 		w.WriteHeader(http.StatusInternalServerError)
 		_ = pageTemplate.ExecuteTemplate(w, "entryForm", data)
@@ -286,11 +286,12 @@ func (s *Server) handleTrashEntry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := diary.TrashEntry(s.cfg.VaultDir, entry, time.Now().UTC()); err != nil {
+	tombstone, err := diary.TrashEntry(s.cfg.VaultDir, entry, time.Now().UTC())
+	if err != nil {
 		http.Redirect(w, r, "/entries/"+url.PathEscape(entryID)+"?message="+urlMessage("Trash failed: "+publicMessage(err)), http.StatusSeeOther)
 		return
 	}
-	if err := s.Reindex(); err != nil {
+	if err := s.store.IndexDeletion(tombstone); err != nil {
 		http.Redirect(w, r, "/?message="+urlMessage("Reindex failed: "+publicMessage(err)), http.StatusSeeOther)
 		return
 	}
@@ -314,12 +315,12 @@ func (s *Server) handleWebAttachMedia(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	_, attachment, err := diary.AttachFile(s.cfg.VaultDir, entry, header.Filename, header.Header.Get("Content-Type"), file, time.Now().UTC())
+	updated, attachment, err := diary.AttachFile(s.cfg.VaultDir, entry, header.Filename, header.Header.Get("Content-Type"), file, time.Now().UTC())
 	if err != nil {
 		http.Redirect(w, r, "/entries/"+url.PathEscape(entryID)+"?message="+urlMessage("Attach failed: "+publicMessage(err)), http.StatusSeeOther)
 		return
 	}
-	if err := s.Reindex(); err != nil {
+	if err := s.indexEntry(updated.VaultPath); err != nil {
 		http.Redirect(w, r, "/entries/"+url.PathEscape(entryID)+"?message="+urlMessage("Reindex failed: "+publicMessage(err)), http.StatusSeeOther)
 		return
 	}

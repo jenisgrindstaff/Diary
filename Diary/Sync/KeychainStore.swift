@@ -24,8 +24,12 @@ final class KeychainStore {
         return value
     }
 
-    func save(_ value: String, account: String) {
-        guard let data = value.data(using: .utf8) else { return }
+    /// Saves a value to the keychain. Returns false if the write failed, so a
+    /// silently-dropped token surfaces at the call site instead of becoming an
+    /// unexplained "unauthorized" on the next sync.
+    @discardableResult
+    func save(_ value: String, account: String) -> Bool {
+        guard let data = value.data(using: .utf8) else { return false }
 
         var query = baseQuery(account: account)
         let attributes: [String: Any] = [kSecValueData as String: data]
@@ -34,8 +38,9 @@ final class KeychainStore {
         if status == errSecItemNotFound {
             query[kSecValueData as String] = data
             query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-            SecItemAdd(query as CFDictionary, nil)
+            return SecItemAdd(query as CFDictionary, nil) == errSecSuccess
         }
+        return status == errSecSuccess
     }
 
     func delete(account: String) {

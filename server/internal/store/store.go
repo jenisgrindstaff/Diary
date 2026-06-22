@@ -3,6 +3,8 @@ package store
 import (
 	"database/sql"
 	"errors"
+	"fmt"
+	"regexp"
 	"time"
 
 	"diary/server/internal/diary"
@@ -81,7 +83,11 @@ CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(
 	body_markdown,
 	tags,
 	people
-);`)
+);
+CREATE INDEX IF NOT EXISTS idx_entries_updated_at ON entries(updated_at);
+CREATE INDEX IF NOT EXISTS idx_entries_created_at ON entries(created_at);
+CREATE INDEX IF NOT EXISTS idx_attachments_entry_id ON attachments(entry_id);
+CREATE INDEX IF NOT EXISTS idx_tombstones_deleted_at ON tombstones(deleted_at);`)
 	if err != nil {
 		return err
 	}
@@ -89,7 +95,16 @@ CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(
 	return s.ensureColumn("entries", "subject_details_json", "TEXT NOT NULL DEFAULT '[]'")
 }
 
+// identifierPattern guards the few schema-migration statements that interpolate
+// table/column names into SQL (which cannot be parameterized). Inputs are
+// always compile-time constants today; the allowlist keeps the pattern from
+// becoming an injection vector if a caller ever passes dynamic input.
+var identifierPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
 func (s *Store) ensureColumn(table string, column string, definition string) error {
+	if !identifierPattern.MatchString(table) || !identifierPattern.MatchString(column) {
+		return fmt.Errorf("invalid identifier: table=%q column=%q", table, column)
+	}
 	rows, err := s.db.Query(`PRAGMA table_info(` + table + `)`)
 	if err != nil {
 		return err
@@ -142,39 +157,151 @@ func (s *Store) ReplaceIndex(entries []diary.Entry, tombstones []diary.Tombstone
 	return tx.Commit()
 }
 
-func (s *Store) EntriesUpdatedSince(cursor string) ([]diary.Entry, string, error) {
+// IndexEntry upserts a single entry (and its attachments) into the index,
+// replacing any existing rows for that id. It also clears any tombstone for the
+// same id so a recreated entry reappears. This is the incremental equivalent of
+// ReplaceIndex for one entry, used on the create/update/attach write paths so a
+// single mutation does O(1) work instead of re-reading the whole vault.
+func (s *Store) IndexEntry(entry diary.Entry) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if err := deleteEntryRows(tx, entry.ID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM tombstones WHERE entry_id = ?`, entry.ID); err != nil {
+		return err
+	}
+	if err := insertEntry(tx, entry); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
+// IndexDeletion removes a single entry from the index and records its tombstone,
+// the incremental equivalent of a full reindex after a trash operation.
+func (s *Store) IndexDeletion(tombstone diary.Tombstone) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if err := deleteEntryRows(tx, tombstone.EntryID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM tombstones WHERE entry_id = ?`, tombstone.EntryID); err != nil {
+		return err
+	}
+	if err := insertTombstone(tx, tombstone); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
+// EntriesUpdatedSince returns entries with updated_at greater than cursor in
+// ascending order. When limit > 0 the result is paginated to at most ~limit
+// entries and hasMore reports whether more remain (clients loop until it is
+// false). Pagination never splits a group of entries sharing the same
+// updated_at across pages, so no entry is skipped even when timestamps collide.
+// limit <= 0 returns every matching entry (unbounded).
+func (s *Store) EntriesUpdatedSince(cursor string, limit int) (entries []diary.Entry, nextCursor string, hasMore bool, err error) {
 	args := []any{}
 	where := ""
 	if cursor != "" {
 		if _, err := time.Parse(time.RFC3339Nano, cursor); err != nil {
-			return nil, "", err
+			return nil, "", false, err
 		}
 		where = "WHERE updated_at > ?"
 		args = append(args, cursor)
 	}
 
+	limitClause := ""
+	if limit > 0 {
+		// Fetch one extra row to detect both whether more entries remain and
+		// whether the boundary timestamp group continues into the next page.
+		limitClause = " LIMIT ?"
+		args = append(args, limit+1)
+	}
+
 	rows, err := s.db.Query(`
 SELECT id, created_at, updated_at, server_revision, title, excerpt, body_markdown, source_path, vault_path, tags_json, people_json, subject_details_json
 FROM entries `+where+`
-ORDER BY updated_at ASC`, args...)
+ORDER BY updated_at ASC`+limitClause, args...)
 	if err != nil {
-		return nil, "", err
+		return nil, "", false, err
 	}
 	defer rows.Close()
 
-	entries, err := scanEntries(rows, s.attachmentsForEntry)
+	entries, err = scanEntries(rows, s.attachmentsForEntries)
 	if err != nil {
-		return nil, "", err
+		return nil, "", false, err
 	}
 
-	nextCursor := cursor
+	if limit > 0 && len(entries) > limit {
+		hasMore = true
+		// We fetched limit+1 rows. Keep the first `limit`, but if the boundary
+		// row shares its timestamp with the peeked extra row, drop that whole
+		// trailing group so it is re-fetched intact next page rather than split.
+		boundary := entries[limit-1].UpdatedAt
+		page := entries[:limit]
+		if boundary.Equal(entries[limit].UpdatedAt) {
+			cut := len(page)
+			for cut > 0 && page[cut-1].UpdatedAt.Equal(boundary) {
+				cut--
+			}
+			page = page[:cut]
+		}
+		if len(page) == 0 {
+			// A single timestamp group is larger than the page size; return the
+			// whole group (unbounded) so the cursor can still advance.
+			return s.entriesWithUpdatedAt(boundary)
+		}
+		entries = page
+	}
+
+	nextCursor = cursor
 	for _, entry := range entries {
-		if entry.UpdatedAt.Format(time.RFC3339Nano) > nextCursor {
-			nextCursor = entry.UpdatedAt.Format(time.RFC3339Nano)
+		if ts := entry.UpdatedAt.Format(time.RFC3339Nano); ts > nextCursor {
+			nextCursor = ts
 		}
 	}
 
-	return entries, nextCursor, nil
+	return entries, nextCursor, hasMore, nil
+}
+
+// entriesWithUpdatedAt returns every entry sharing the given updated_at
+// timestamp. It is the fallback for the rare case where one timestamp group is
+// larger than a page, ensuring the sync cursor still makes forward progress.
+func (s *Store) entriesWithUpdatedAt(updatedAt time.Time) ([]diary.Entry, string, bool, error) {
+	ts := updatedAt.Format(time.RFC3339Nano)
+
+	rows, err := s.db.Query(`
+SELECT id, created_at, updated_at, server_revision, title, excerpt, body_markdown, source_path, vault_path, tags_json, people_json, subject_details_json
+FROM entries
+WHERE updated_at = ?
+ORDER BY id ASC`, ts)
+	if err != nil {
+		return nil, "", false, err
+	}
+	defer rows.Close()
+
+	entries, err := scanEntries(rows, s.attachmentsForEntries)
+	if err != nil {
+		return nil, "", false, err
+	}
+
+	var more bool
+	if err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM entries WHERE updated_at > ?)`, ts).Scan(&more); err != nil {
+		return nil, "", false, err
+	}
+
+	return entries, ts, more, nil
 }
 
 func (s *Store) TombstonesUpdatedSince(cursor string) ([]diary.Tombstone, string, error) {
@@ -230,7 +357,7 @@ ORDER BY created_at DESC, title ASC`)
 	}
 	defer rows.Close()
 
-	return scanEntries(rows, s.attachmentsForEntry)
+	return scanEntries(rows, s.attachmentsForEntries)
 }
 
 func (s *Store) Entry(id string) (diary.Entry, error) {
@@ -243,7 +370,7 @@ WHERE id = ?`, id)
 	}
 	defer rows.Close()
 
-	entries, err := scanEntries(rows, s.attachmentsForEntry)
+	entries, err := scanEntries(rows, s.attachmentsForEntries)
 	if err != nil {
 		return diary.Entry{}, err
 	}

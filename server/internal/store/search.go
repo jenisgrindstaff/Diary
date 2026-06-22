@@ -50,7 +50,7 @@ ORDER BY rank, e.created_at DESC`, query)
 		return nil, err
 	}
 
-	return scanSearchResults(rows, s.attachmentsForEntry)
+	return scanSearchResults(rows, s.attachmentsForEntries)
 }
 
 func FTSQuery(query string) string {

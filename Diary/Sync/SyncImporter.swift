@@ -104,7 +104,12 @@ enum SyncImporter {
 
     @MainActor
     private static func existingEntry(id: String, modelContext: ModelContext) throws -> DiaryEntry? {
-        try modelContext.fetch(FetchDescriptor<DiaryEntry>()).first { $0.id == id }
+        // Fetch by predicate rather than loading every entry and filtering in
+        // memory — the latter is O(n) per lookup, i.e. O(n²) across a full
+        // paginated resync.
+        var descriptor = FetchDescriptor<DiaryEntry>(predicate: #Predicate { $0.id == id })
+        descriptor.fetchLimit = 1
+        return try modelContext.fetch(descriptor).first
     }
 }
 

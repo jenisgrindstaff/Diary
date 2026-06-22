@@ -161,6 +161,21 @@ func RenderMarkdown(entry Entry) ([]byte, error) {
 	return out.Bytes(), nil
 }
 
+// ReadEntry parses a single entry file from disk and applies the same
+// derivations as ReadVault (birthdate details from people.yaml). It lets write
+// paths reindex one entry incrementally instead of walking the whole vault.
+func ReadEntry(vaultDir string, path string) (Entry, error) {
+	people, err := LoadPeople(vaultDir)
+	if err != nil {
+		return Entry{}, err
+	}
+	entry, err := ParseMarkdown(path, vaultDir)
+	if err != nil {
+		return Entry{}, err
+	}
+	return ApplyBirthdateDetails(entry, people), nil
+}
+
 func ReadVault(vaultDir string) ([]Entry, error) {
 	var entries []Entry
 	entriesDir := filepath.Join(vaultDir, "entries")

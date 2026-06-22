@@ -69,7 +69,7 @@ func AttachFile(vaultDir string, entry Entry, filename string, contentType strin
 	if err != nil {
 		return Entry{}, Attachment{}, err
 	}
-	if err := os.WriteFile(entry.VaultPath, data, 0o644); err != nil {
+	if err := writeEntryFile(entry.VaultPath, data); err != nil {
 		return Entry{}, Attachment{}, err
 	}
 
@@ -112,7 +112,7 @@ func RemoveAttachment(vaultDir string, entry Entry, attachmentID string, now tim
 	if err != nil {
 		return Entry{}, Attachment{}, err
 	}
-	if err := os.WriteFile(entry.VaultPath, data, 0o644); err != nil {
+	if err := writeEntryFile(entry.VaultPath, data); err != nil {
 		return Entry{}, Attachment{}, err
 	}
 

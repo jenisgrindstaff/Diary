@@ -89,9 +89,14 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// syncPageSize bounds how many entries one sync response carries so a large
+// vault (or a full resync) never streams every entry body in a single payload.
+// Clients drain pages by repeating the request until has_more is false.
+const syncPageSize = 250
+
 func (s *Server) handleEntries(w http.ResponseWriter, r *http.Request) {
 	cursor := r.URL.Query().Get("updated_since")
-	entries, nextCursor, err := s.store.EntriesUpdatedSince(cursor)
+	entries, nextCursor, hasMore, err := s.store.EntriesUpdatedSince(cursor, syncPageSize)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, publicMessage(err))
 		return
@@ -107,7 +112,14 @@ func (s *Server) handleEntries(w http.ResponseWriter, r *http.Request) {
 		deletedEntryIDs = append(deletedEntryIDs, tombstone.EntryID)
 	}
 
-	nextCursor = newerCursor(nextCursor, tombstoneCursor)
+	// While more entry pages remain, hold the cursor at the last entry returned
+	// so we never advance past unsent entries. Tombstones (which are small and
+	// sent in full each page) may be re-sent on the next page; deletions are
+	// applied idempotently, so that is harmless. Only once entries are drained
+	// do we fold in the tombstone cursor.
+	if !hasMore {
+		nextCursor = newerCursor(nextCursor, tombstoneCursor)
+	}
 	if deviceID := authenticatedDeviceID(r.Context()); deviceID != "" {
 		_ = s.store.UpdateDeviceSyncCursor(deviceID, nextCursor, time.Now().UTC())
 	}
@@ -116,6 +128,7 @@ func (s *Server) handleEntries(w http.ResponseWriter, r *http.Request) {
 		"entries":           entries,
 		"deleted_entry_ids": deletedEntryIDs,
 		"next_cursor":       nextCursor,
+		"has_more":          hasMore,
 	})
 }
 

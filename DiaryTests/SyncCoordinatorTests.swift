@@ -101,6 +101,28 @@ final class SyncCoordinatorTests: XCTestCase {
         XCTAssertTrue(entries.isEmpty)
     }
 
+    func testLocalMediaStoreRemovesAttachmentFiles() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appending(path: "media-test-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let mediaStore = LocalMediaStore(root: root)
+
+        let keepPath = mediaStore.relativePath(attachmentID: "keep", filename: "a.jpg")
+        let dropPath = mediaStore.relativePath(attachmentID: "drop", filename: "b.jpg")
+        try mediaStore.save(data: Data("a".utf8), relativePath: keepPath)
+        try mediaStore.save(data: Data("b".utf8), relativePath: dropPath)
+        XCTAssertTrue(mediaStore.fileExists(relativePath: keepPath))
+        XCTAssertTrue(mediaStore.fileExists(relativePath: dropPath))
+
+        mediaStore.removeAttachment(attachmentID: "drop")
+
+        XCTAssertFalse(mediaStore.fileExists(relativePath: dropPath), "removed attachment's file should be gone")
+        XCTAssertTrue(mediaStore.fileExists(relativePath: keepPath), "other attachments must be untouched")
+
+        // Removing a non-existent attachment is a safe no-op.
+        mediaStore.removeAttachment(attachmentID: "never-existed")
+    }
+
     func testDiscardPendingUpdateClearsQueueAndForcesFullRefresh() async throws {
         let context = try makeContext()
         let appState = makeAppState()
