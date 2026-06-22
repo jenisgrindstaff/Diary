@@ -2,6 +2,9 @@ import SwiftData
 import SwiftUI
 
 struct SearchView: View {
+    @Environment(\.modelContext) private var modelContext
+    @Environment(AppState.self) private var appState
+
     @Query(
         filter: #Predicate<DiaryEntry> { $0.isTombstoned == false },
         sort: \DiaryEntry.createdAt,
@@ -10,7 +13,9 @@ struct SearchView: View {
     private var entries: [DiaryEntry]
     @Query(sort: \PendingChange.createdAt, order: .forward) private var pendingChanges: [PendingChange]
 
+    @State private var syncCoordinator = SyncCoordinator()
     @State private var searchText = ""
+    @State private var serverSearchState = ServerSearchState.idle
 
     private var pendingByEntryID: [String: PendingChange] {
         Dictionary(pendingChanges.map { ($0.entryID, $0) }, uniquingKeysWith: { first, _ in first })
@@ -41,7 +46,27 @@ struct SearchView: View {
         NavigationStack {
             List {
                 if !trimmedSearchText.isEmpty && !results.isEmpty {
-                    SearchResultSummary(resultCount: results.count, totalCount: entries.count)
+                    SearchControlRow(
+                        localResultCount: results.count,
+                        totalCount: entries.count,
+                        state: serverSearchState,
+                        isDisabled: syncCoordinator.isSyncing
+                    ) {
+                        Task {
+                            await searchServer()
+                        }
+                    }
+                } else if !trimmedSearchText.isEmpty {
+                    SearchControlRow(
+                        localResultCount: 0,
+                        totalCount: entries.count,
+                        state: serverSearchState,
+                        isDisabled: syncCoordinator.isSyncing
+                    ) {
+                        Task {
+                            await searchServer()
+                        }
+                    }
                 }
 
                 ForEach(results) { entry in
@@ -69,25 +94,83 @@ struct SearchView: View {
             }
             .searchable(text: $searchText, prompt: "Entries, tags, people")
             .searchToolbarBehavior(.minimize)
+            .onChange(of: trimmedSearchText) { _, _ in
+                serverSearchState = .idle
+            }
+        }
+    }
+
+    private func searchServer() async {
+        guard !trimmedSearchText.isEmpty else {
+            return
+        }
+
+        serverSearchState = .searching
+
+        do {
+            let count = try await syncCoordinator.searchServer(
+                query: trimmedSearchText,
+                modelContext: modelContext,
+                appState: appState
+            )
+            serverSearchState = .completed(count)
+        } catch {
+            serverSearchState = .failed(error.localizedDescription)
         }
     }
 }
 
-private struct SearchResultSummary: View {
-    let resultCount: Int
+private enum ServerSearchState: Equatable {
+    case idle
+    case searching
+    case completed(Int)
+    case failed(String)
+}
+
+private struct SearchControlRow: View {
+    let localResultCount: Int
     let totalCount: Int
+    let state: ServerSearchState
+    let isDisabled: Bool
+    let searchServer: () -> Void
 
     var body: some View {
-        HStack {
-            Label("\(resultCount) result\(resultCount == 1 ? "" : "s")", systemImage: "magnifyingglass")
-            Spacer()
-            Text("\(totalCount) entries")
-                .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label("\(localResultCount) local result\(localResultCount == 1 ? "" : "s")", systemImage: "magnifyingglass")
+                Spacer()
+                Text("\(totalCount) cached")
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack {
+                serverStatus
+                Spacer()
+                Button("Search Server", systemImage: "icloud.and.arrow.down") {
+                    searchServer()
+                }
+                .disabled(isDisabled || state == .searching)
+            }
         }
         .font(.footnote)
         .foregroundStyle(.secondary)
-        .accessibilityElement(children: .combine)
         .listRowSeparator(.hidden)
+    }
+
+    @ViewBuilder
+    private var serverStatus: some View {
+        switch state {
+        case .idle:
+            Text("Server search checks canonical Markdown.")
+        case .searching:
+            Label("Searching server", systemImage: "hourglass")
+        case .completed(let count):
+            Label("\(count) server result\(count == 1 ? "" : "s") imported", systemImage: "checkmark.circle")
+                .foregroundStyle(.green)
+        case .failed(let message):
+            Label(message, systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(.red)
+        }
     }
 }
 

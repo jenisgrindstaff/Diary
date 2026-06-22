@@ -62,6 +62,36 @@ final class SyncDTOTests: XCTestCase {
         XCTAssertEqual(envelope.nextCursor, "2026-06-22T13:44:00.48969Z")
     }
 
+    func testDecodesSearchEntriesResponseFromServerJSON() throws {
+        let json = """
+        {
+          "entries": [
+            {
+              "id": "entry-1",
+              "created_at": "2025-11-21T05:00:00Z",
+              "updated_at": "2026-06-22T13:44:00.48969Z",
+              "server_revision": "revision-1",
+              "title": "ER",
+              "excerpt": "A matching excerpt",
+              "body_markdown": "A matching body",
+              "source_path": "entries/2025/11/2025-11-21-er.md",
+              "tags": [],
+              "people": ["Chase"],
+              "subject_details": [],
+              "attachments": []
+            }
+          ],
+          "query": "diabetes"
+        }
+        """.data(using: .utf8)!
+
+        let response = try makeDecoder().decode(SearchEntriesResponse.self, from: json)
+
+        XCTAssertEqual(response.query, "diabetes")
+        XCTAssertEqual(response.entries.count, 1)
+        XCTAssertEqual(response.entries.first?.title, "ER")
+    }
+
     func testDecodesDeleteEntryResponseFromServerJSON() throws {
         let json = """
         {

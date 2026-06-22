@@ -12,6 +12,11 @@ struct EntrySyncEnvelope: Decodable, Sendable {
     }
 }
 
+struct SearchEntriesResponse: Decodable, Sendable {
+    let entries: [EntryDTO]
+    let query: String
+}
+
 struct EntryDTO: Decodable, Sendable {
     let id: String
     let createdAt: Date

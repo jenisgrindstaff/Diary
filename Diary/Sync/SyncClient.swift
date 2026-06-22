@@ -35,6 +35,18 @@ actor SyncClient {
         return try decoder.decode(EntrySyncEnvelope.self, from: data)
     }
 
+    func searchEntries(query: String) async throws -> SearchEntriesResponse {
+        var components = URLComponents(url: baseURL.appending(path: "/api/v1/search"), resolvingAgainstBaseURL: false)
+        components?.queryItems = [URLQueryItem(name: "q", value: query)]
+
+        guard let url = components?.url else {
+            throw SyncClientError.invalidURL
+        }
+
+        let data = try await data(for: url, method: "GET")
+        return try decoder.decode(SearchEntriesResponse.self, from: data)
+    }
+
     func registerDevice() async throws -> RegisterDeviceResponse {
         let url = baseURL.appending(path: "/api/v1/sync/register-device")
         let body = try JSONEncoder().encode([

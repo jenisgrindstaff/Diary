@@ -78,6 +78,46 @@ final class SyncCoordinator {
         await sync(modelContext: modelContext, appState: appState)
     }
 
+    func searchServer(
+        query: String,
+        modelContext: ModelContext,
+        appState: AppState
+    ) async throws -> Int {
+        guard !isSyncing else { return 0 }
+        guard let baseURL = appState.serverURL else {
+            throw SyncCoordinatorError.invalidServerURL
+        }
+
+        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedQuery.isEmpty else {
+            return 0
+        }
+
+        isSyncing = true
+        lastError = nil
+        defer { isSyncing = false }
+
+        let checkpoint = try SyncImporter.checkpoint(
+            deviceID: appState.deviceID,
+            serverBaseURL: baseURL.absoluteString,
+            modelContext: modelContext
+        )
+        let client = SyncClient(
+            baseURL: baseURL,
+            bearerToken: appState.accessToken,
+            deviceID: appState.deviceID
+        )
+        let response = try await client.searchEntries(query: trimmedQuery)
+        let envelope = EntrySyncEnvelope(
+            entries: response.entries,
+            deletedEntryIDs: [],
+            nextCursor: checkpoint.cursor
+        )
+        try SyncImporter.apply(envelope: envelope, checkpoint: checkpoint, modelContext: modelContext)
+        try await cacheAttachments(from: envelope, client: client, modelContext: modelContext)
+        return response.entries.count
+    }
+
     func registerDevice(appState: AppState) async {
         guard let baseURL = appState.serverURL else {
             appState.syncStatus = .failed("Enter a valid server URL in Settings.")
