@@ -131,15 +131,28 @@ func (s *Server) handleEntry(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
-	entries, err := s.store.Search(query)
+	results, err := s.store.SearchWithSnippets(query)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, publicMessage(err))
 		return
 	}
 
+	entries := make([]any, 0, len(results))
+	snippets := make([]any, 0, len(results))
+	for _, result := range results {
+		entries = append(entries, result.Entry)
+		if strings.TrimSpace(result.Snippet) != "" {
+			snippets = append(snippets, map[string]string{
+				"entry_id": result.Entry.ID,
+				"text":     result.Snippet,
+			})
+		}
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"entries": entries,
-		"query":   query,
+		"entries":  entries,
+		"query":    query,
+		"snippets": snippets,
 	})
 }
 

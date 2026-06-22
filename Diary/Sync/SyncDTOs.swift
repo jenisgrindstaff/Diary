@@ -15,6 +15,34 @@ struct EntrySyncEnvelope: Decodable, Sendable {
 struct SearchEntriesResponse: Decodable, Sendable {
     let entries: [EntryDTO]
     let query: String
+    let snippets: [SearchSnippetDTO]
+
+    var snippetsByEntryID: [String: String] {
+        Dictionary(snippets.map { ($0.entryID, $0.text) }, uniquingKeysWith: { first, _ in first })
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        entries = try container.decode([EntryDTO].self, forKey: .entries)
+        query = try container.decode(String.self, forKey: .query)
+        snippets = try container.decodeIfPresent([SearchSnippetDTO].self, forKey: .snippets) ?? []
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case entries
+        case query
+        case snippets
+    }
+}
+
+struct SearchSnippetDTO: Decodable, Sendable {
+    let entryID: String
+    let text: String
+
+    private enum CodingKeys: String, CodingKey {
+        case entryID = "entry_id"
+        case text
+    }
 }
 
 struct EntryDTO: Decodable, Sendable {

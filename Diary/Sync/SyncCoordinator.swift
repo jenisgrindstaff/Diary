@@ -82,15 +82,17 @@ final class SyncCoordinator {
         query: String,
         modelContext: ModelContext,
         appState: AppState
-    ) async throws -> Int {
-        guard !isSyncing else { return 0 }
+    ) async throws -> ServerSearchSummary {
+        guard !isSyncing else {
+            return ServerSearchSummary(resultCount: 0, snippetsByEntryID: [:])
+        }
         guard let baseURL = appState.serverURL else {
             throw SyncCoordinatorError.invalidServerURL
         }
 
         let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedQuery.isEmpty else {
-            return 0
+            return ServerSearchSummary(resultCount: 0, snippetsByEntryID: [:])
         }
 
         isSyncing = true
@@ -115,7 +117,10 @@ final class SyncCoordinator {
         )
         try SyncImporter.apply(envelope: envelope, checkpoint: checkpoint, modelContext: modelContext)
         try await cacheAttachments(from: envelope, client: client, modelContext: modelContext)
-        return response.entries.count
+        return ServerSearchSummary(
+            resultCount: response.entries.count,
+            snippetsByEntryID: response.snippetsByEntryID
+        )
     }
 
     func registerDevice(appState: AppState) async {
@@ -944,6 +949,11 @@ struct PendingConflictResolution: Identifiable {
         parts.append(localBodyMarkdown)
         return parts.joined(separator: "\n\n")
     }
+}
+
+struct ServerSearchSummary: Equatable {
+    let resultCount: Int
+    let snippetsByEntryID: [String: String]
 }
 
 private struct PendingMediaPayload: Codable {

@@ -16,6 +16,7 @@ struct SearchView: View {
     @State private var syncCoordinator = SyncCoordinator()
     @State private var searchText = ""
     @State private var serverSearchState = ServerSearchState.idle
+    @State private var serverSnippetsByEntryID: [String: String] = [:]
 
     private var pendingByEntryID: [String: PendingChange] {
         Dictionary(pendingChanges.map { ($0.entryID, $0) }, uniquingKeysWith: { first, _ in first })
@@ -71,7 +72,11 @@ struct SearchView: View {
 
                 ForEach(results) { entry in
                     NavigationLink(value: entry.id) {
-                        EntryRow(entry: entry, pendingChange: pendingByEntryID[entry.id])
+                        SearchEntryRow(
+                            entry: entry,
+                            pendingChange: pendingByEntryID[entry.id],
+                            snippet: serverSnippetsByEntryID[entry.id]
+                        )
                     }
                     .listRowInsets(EdgeInsets(top: 10, leading: 18, bottom: 10, trailing: 18))
                 }
@@ -96,6 +101,7 @@ struct SearchView: View {
             .searchToolbarBehavior(.minimize)
             .onChange(of: trimmedSearchText) { _, _ in
                 serverSearchState = .idle
+                serverSnippetsByEntryID = [:]
             }
         }
     }
@@ -108,15 +114,74 @@ struct SearchView: View {
         serverSearchState = .searching
 
         do {
-            let count = try await syncCoordinator.searchServer(
+            let summary = try await syncCoordinator.searchServer(
                 query: trimmedSearchText,
                 modelContext: modelContext,
                 appState: appState
             )
-            serverSearchState = .completed(count)
+            serverSnippetsByEntryID = summary.snippetsByEntryID
+            serverSearchState = .completed(summary.resultCount)
         } catch {
             serverSearchState = .failed(error.localizedDescription)
         }
+    }
+}
+
+private struct SearchEntryRow: View {
+    let entry: DiaryEntry
+    var pendingChange: PendingChange?
+    var snippet: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            EntryRow(entry: entry, pendingChange: pendingChange)
+
+            if let snippet, !snippet.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                SearchSnippetText(snippet: snippet)
+            }
+        }
+    }
+}
+
+private struct SearchSnippetText: View {
+    let snippet: String
+
+    var body: some View {
+        Text(attributedSnippet)
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .lineLimit(3)
+            .accessibilityLabel(cleanSnippet)
+    }
+
+    private var attributedSnippet: AttributedString {
+        var output = AttributedString()
+        var remaining = snippet[...]
+
+        while let markerStart = remaining.range(of: "[[") {
+            output.append(AttributedString(String(remaining[..<markerStart.lowerBound])))
+            remaining = remaining[markerStart.upperBound...]
+
+            guard let markerEnd = remaining.range(of: "]]") else {
+                output.append(AttributedString(String(remaining)))
+                return output
+            }
+
+            var highlighted = AttributedString(String(remaining[..<markerEnd.lowerBound]))
+            highlighted.foregroundColor = .primary
+            highlighted.font = .body.bold()
+            output.append(highlighted)
+            remaining = remaining[markerEnd.upperBound...]
+        }
+
+        output.append(AttributedString(String(remaining)))
+        return output
+    }
+
+    private var cleanSnippet: String {
+        snippet
+            .replacingOccurrences(of: "[[", with: "")
+            .replacingOccurrences(of: "]]", with: "")
     }
 }
 

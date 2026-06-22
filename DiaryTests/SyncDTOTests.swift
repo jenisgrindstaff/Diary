@@ -81,7 +81,13 @@ final class SyncDTOTests: XCTestCase {
               "attachments": []
             }
           ],
-          "query": "diabetes"
+          "query": "diabetes",
+          "snippets": [
+            {
+              "entry_id": "entry-1",
+              "text": "diagnosed with Type 1 [[diabetes]]"
+            }
+          ]
         }
         """.data(using: .utf8)!
 
@@ -90,6 +96,7 @@ final class SyncDTOTests: XCTestCase {
         XCTAssertEqual(response.query, "diabetes")
         XCTAssertEqual(response.entries.count, 1)
         XCTAssertEqual(response.entries.first?.title, "ER")
+        XCTAssertEqual(response.snippetsByEntryID["entry-1"], "diagnosed with Type 1 [[diabetes]]")
     }
 
     func testDecodesDeleteEntryResponseFromServerJSON() throws {

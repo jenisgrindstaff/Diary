@@ -889,6 +889,10 @@ func TestSearchAPI(t *testing.T) {
 			Title  string   `json:"title"`
 			People []string `json:"people"`
 		} `json:"entries"`
+		Snippets []struct {
+			EntryID string `json:"entry_id"`
+			Text    string `json:"text"`
+		} `json:"snippets"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
@@ -898,6 +902,9 @@ func TestSearchAPI(t *testing.T) {
 	}
 	if len(payload.Entries) != 1 || payload.Entries[0].People[0] != "Chase" {
 		t.Fatalf("unexpected search results: %+v", payload.Entries)
+	}
+	if len(payload.Snippets) != 1 || !strings.Contains(payload.Snippets[0].Text, "[[Another]]") {
+		t.Fatalf("unexpected snippets: %+v", payload.Snippets)
 	}
 }
 

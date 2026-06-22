@@ -125,6 +125,34 @@ func scanEntries(rows *sql.Rows, attachments func(string) ([]diary.Attachment, e
 	return entries, nil
 }
 
+func scanSearchResults(rows *sql.Rows, attachments func(string) ([]diary.Attachment, error)) ([]SearchResult, error) {
+	results := []SearchResult{}
+	for rows.Next() {
+		result, err := scanSearchResult(rows)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, result)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+
+	for i := range results {
+		entryAttachments, err := attachments(results[i].Entry.ID)
+		if err != nil {
+			return nil, err
+		}
+		results[i].Entry.Attachments = entryAttachments
+	}
+
+	return results, nil
+}
+
 func scanEntry(row rowScanner) (diary.Entry, error) {
 	var entry diary.Entry
 	var createdAt, updatedAt, tagsJSON, peopleJSON, subjectDetailsJSON string
@@ -154,6 +182,39 @@ func scanEntry(row rowScanner) (diary.Entry, error) {
 		entry.SubjectDetails = []diary.SubjectDetail{}
 	}
 	return entry, nil
+}
+
+func scanSearchResult(row rowScanner) (SearchResult, error) {
+	var entry diary.Entry
+	var createdAt, updatedAt, tagsJSON, peopleJSON, subjectDetailsJSON, snippet string
+	if err := row.Scan(
+		&entry.ID,
+		&createdAt,
+		&updatedAt,
+		&entry.ServerRevision,
+		&entry.Title,
+		&entry.Excerpt,
+		&entry.BodyMarkdown,
+		&entry.SourcePath,
+		&entry.VaultPath,
+		&tagsJSON,
+		&peopleJSON,
+		&subjectDetailsJSON,
+		&snippet,
+	); err != nil {
+		return SearchResult{}, err
+	}
+
+	entry.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
+	entry.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
+	_ = json.Unmarshal([]byte(tagsJSON), &entry.Tags)
+	_ = json.Unmarshal([]byte(peopleJSON), &entry.People)
+	_ = json.Unmarshal([]byte(subjectDetailsJSON), &entry.SubjectDetails)
+	if entry.SubjectDetails == nil {
+		entry.SubjectDetails = []diary.SubjectDetail{}
+	}
+
+	return SearchResult{Entry: entry, Snippet: snippet}, nil
 }
 
 func (s *Store) attachmentsForEntry(entryID string) ([]diary.Attachment, error) {
