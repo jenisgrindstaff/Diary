@@ -1,4 +1,5 @@
 import CoreTransferable
+import Foundation
 import PhotosUI
 import SwiftData
 import SwiftUI
@@ -22,6 +23,10 @@ struct TimelineView: View {
         Dictionary(pendingChanges.map { ($0.entryID, $0) }, uniquingKeysWith: { first, _ in first })
     }
 
+    private var sections: [TimelineSection] {
+        TimelineSection.group(entries)
+    }
+
     var body: some View {
         NavigationStack {
             Group {
@@ -32,11 +37,19 @@ struct TimelineView: View {
                         description: Text("Sync with your Markdown diary server to fill the offline cache.")
                     )
                 } else {
-                    List(entries) { entry in
-                        NavigationLink(value: entry.id) {
-                            EntryRow(entry: entry, pendingChange: pendingByEntryID[entry.id])
+                    List {
+                        ForEach(sections) { section in
+                            Section {
+                                ForEach(section.entries) { entry in
+                                    NavigationLink(value: entry.id) {
+                                        EntryRow(entry: entry, pendingChange: pendingByEntryID[entry.id])
+                                    }
+                                    .listRowInsets(EdgeInsets(top: 10, leading: 18, bottom: 10, trailing: 18))
+                                }
+                            } header: {
+                                TimelineSectionHeader(section: section)
+                            }
                         }
-                        .listRowInsets(EdgeInsets(top: 10, leading: 18, bottom: 10, trailing: 18))
                     }
                     .listStyle(.plain)
                     .refreshable {
@@ -75,6 +88,62 @@ struct TimelineView: View {
                 }
             }
         }
+    }
+}
+
+private struct TimelineSection: Identifiable {
+    let id: String
+    let title: String
+    let entries: [DiaryEntry]
+
+    static func group(_ entries: [DiaryEntry], calendar: Calendar = .current) -> [TimelineSection] {
+        var grouped: [DateComponents: [DiaryEntry]] = [:]
+
+        for entry in entries {
+            let components = calendar.dateComponents([.year, .month], from: entry.createdAt)
+            grouped[components, default: []].append(entry)
+        }
+
+        return grouped.compactMap { components, entries in
+            guard let year = components.year,
+                  let month = components.month,
+                  let date = calendar.date(from: components) else {
+                return nil
+            }
+
+            return TimelineSection(
+                id: "\(year)-\(String(format: "%02d", month))",
+                title: date.formatted(.dateTime.month(.wide).year()),
+                entries: entries.sorted { $0.createdAt > $1.createdAt }
+            )
+        }
+        .sorted { first, second in
+            guard let firstEntry = first.entries.first,
+                  let secondEntry = second.entries.first else {
+                return first.title > second.title
+            }
+
+            return firstEntry.createdAt > secondEntry.createdAt
+        }
+    }
+}
+
+private struct TimelineSectionHeader: View {
+    let section: TimelineSection
+
+    var body: some View {
+        HStack {
+            Text(section.title)
+                .font(.subheadline.weight(.semibold))
+            Spacer()
+            Text("\(section.entries.count)")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+        }
+        .textCase(nil)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(section.title), \(section.entries.count) entries")
     }
 }
 

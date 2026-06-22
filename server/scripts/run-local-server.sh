@@ -1,21 +1,22 @@
 #!/bin/sh
 set -eu
 
-ROOT="/Users/jg/projects/Diary"
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
 SERVER="$ROOT/server"
-GO="/usr/local/go/bin/go"
+GO="${GO:-go}"
 
-export PATH="/usr/local/go/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH="/usr/local/go/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 
-mkdir -p "$ROOT/vault" "$ROOT/imports" "$SERVER/tmp/data"
+export DIARY_ADDR="${DIARY_ADDR:-127.0.0.1:18080}"
+export DIARY_VAULT_DIR="${DIARY_VAULT_DIR:-$ROOT/vault}"
+export DIARY_IMPORT_DIR="${DIARY_IMPORT_DIR:-$ROOT/imports}"
+export DIARY_DATA_DIR="${DIARY_DATA_DIR:-$SERVER/tmp/data}"
+export DIARY_API_TOKEN="${DIARY_API_TOKEN:-local-dev-token}"
+
+mkdir -p "$DIARY_VAULT_DIR" "$DIARY_IMPORT_DIR" "$DIARY_DATA_DIR"
 
 cd "$SERVER"
 "$GO" build -o "$SERVER/tmp/diary-server-local" ./cmd/diary-server
-
-export DIARY_ADDR="127.0.0.1:18080"
-export DIARY_VAULT_DIR="$ROOT/vault"
-export DIARY_IMPORT_DIR="$ROOT/imports"
-export DIARY_DATA_DIR="$SERVER/tmp/data"
-export DIARY_API_TOKEN="local-dev-token"
 
 exec "$SERVER/tmp/diary-server-local"

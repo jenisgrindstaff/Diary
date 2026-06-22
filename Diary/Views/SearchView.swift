@@ -17,27 +17,49 @@ struct SearchView: View {
     }
 
     private var results: [DiaryEntry] {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else {
+        guard !searchTerms.isEmpty else {
             return entries
         }
 
-        let normalizedQuery = query.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
         return entries.filter { entry in
-            entry.searchTextStorage.localizedStandardContains(normalizedQuery)
+            searchTerms.allSatisfy { entry.searchTextStorage.contains($0) }
         }
+    }
+
+    private var trimmedSearchText: String {
+        searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var searchTerms: [String] {
+        trimmedSearchText
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .split(whereSeparator: \.isWhitespace)
+            .map(String.init)
     }
 
     var body: some View {
         NavigationStack {
-            List(results) { entry in
-                NavigationLink(value: entry.id) {
-                    EntryRow(entry: entry, pendingChange: pendingByEntryID[entry.id])
+            List {
+                if !trimmedSearchText.isEmpty && !results.isEmpty {
+                    SearchResultSummary(resultCount: results.count, totalCount: entries.count)
                 }
-                .listRowInsets(EdgeInsets(top: 10, leading: 18, bottom: 10, trailing: 18))
+
+                ForEach(results) { entry in
+                    NavigationLink(value: entry.id) {
+                        EntryRow(entry: entry, pendingChange: pendingByEntryID[entry.id])
+                    }
+                    .listRowInsets(EdgeInsets(top: 10, leading: 18, bottom: 10, trailing: 18))
+                }
             }
+            .listStyle(.plain)
             .overlay {
-                if results.isEmpty {
+                if entries.isEmpty && trimmedSearchText.isEmpty {
+                    ContentUnavailableView(
+                        "No Entries",
+                        systemImage: "book.closed",
+                        description: Text("Sync with your Markdown diary server to fill the offline cache.")
+                    )
+                } else if results.isEmpty {
                     ContentUnavailableView.search(text: searchText)
                 }
             }
@@ -48,6 +70,24 @@ struct SearchView: View {
             .searchable(text: $searchText, prompt: "Entries, tags, people")
             .searchToolbarBehavior(.minimize)
         }
+    }
+}
+
+private struct SearchResultSummary: View {
+    let resultCount: Int
+    let totalCount: Int
+
+    var body: some View {
+        HStack {
+            Label("\(resultCount) result\(resultCount == 1 ? "" : "s")", systemImage: "magnifyingglass")
+            Spacer()
+            Text("\(totalCount) entries")
+                .foregroundStyle(.secondary)
+        }
+        .font(.footnote)
+        .foregroundStyle(.secondary)
+        .accessibilityElement(children: .combine)
+        .listRowSeparator(.hidden)
     }
 }
 
