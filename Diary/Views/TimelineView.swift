@@ -20,7 +20,6 @@ struct TimelineView: View {
     @State private var searchText = ""
     @State private var localSearchEntries: [DiaryEntry] = []
     @State private var serverSearchState = TimelineServerSearchState.idle
-    @FocusState private var isSearchFocused: Bool
 
     private let localSearchLimit = 500
 
@@ -136,6 +135,7 @@ struct TimelineView: View {
                 }
             }
             .navigationTitle("Diary")
+            .searchable(text: $searchText, placement: .toolbar, prompt: "Search entries, people")
             .navigationDestination(for: String.self) { entryID in
                 EntryDetailResolver(entryID: entryID)
             }
@@ -203,17 +203,9 @@ struct TimelineView: View {
                 }
             }
             .safeAreaInset(edge: .bottom) {
-                VStack(spacing: 8) {
-                    if case .failed = appState.syncStatus {
-                        SyncStatusBanner(status: appState.syncStatus)
-                    }
-
-                    TimelineSearchField(text: $searchText, isFocused: $isSearchFocused)
+                if case .failed = appState.syncStatus {
+                    SyncStatusBanner(status: appState.syncStatus)
                 }
-                .padding(.horizontal)
-                .padding(.top, 8)
-                .padding(.bottom, 8)
-                .background(.bar)
             }
         }
     }
@@ -281,43 +273,6 @@ private enum EntryComposerMode: String, Identifiable {
     case full
 
     var id: String { rawValue }
-}
-
-private struct TimelineSearchField: View {
-    @Binding var text: String
-    @FocusState.Binding var isFocused: Bool
-
-    var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "magnifyingglass")
-                .foregroundStyle(.secondary)
-
-            TextField("Search entries, tags, people", text: $text)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .textFieldStyle(.plain)
-                .submitLabel(.search)
-                .focused($isFocused)
-
-            if !text.isEmpty {
-                Button("Clear", systemImage: "xmark.circle.fill") {
-                    text = ""
-                    isFocused = true
-                }
-                .labelStyle(.iconOnly)
-                .foregroundStyle(.secondary)
-                .accessibilityLabel("Clear search")
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 11)
-        .background(.quaternary, in: .rect(cornerRadius: 12))
-        .overlay {
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(isFocused ? Color.accentColor.opacity(0.5) : Color.secondary.opacity(0.15), lineWidth: 1)
-        }
-        .accessibilityElement(children: .contain)
-    }
 }
 
 private enum TimelineServerSearchState: Equatable {
