@@ -494,6 +494,7 @@ final class SyncCoordinator {
         client: SyncClient,
         modelContext: ModelContext
     ) async throws {
+        let localEntryID = change.entryID
         let payload: PendingEntryWritePayload = try decodePayload(change.payloadJSON)
         let response = try await client.createEntry(payload.draft, clientMutationID: change.id)
         var latestEntry = response.entry
@@ -505,8 +506,8 @@ final class SyncCoordinator {
             try await importEntry(latestEntry, checkpoint: checkpoint, client: client, modelContext: modelContext)
         }
 
-        try updateQueuedEntryIDs(from: change.entryID, to: latestEntry.id, modelContext: modelContext)
-        if change.entryID != latestEntry.id, let localEntry = try entry(id: change.entryID, modelContext: modelContext) {
+        try updateQueuedEntryIDs(from: localEntryID, to: latestEntry.id, modelContext: modelContext)
+        if localEntryID != latestEntry.id, let localEntry = try entry(id: localEntryID, modelContext: modelContext) {
             modelContext.delete(localEntry)
         }
 

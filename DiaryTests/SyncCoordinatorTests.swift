@@ -1,3 +1,4 @@
+import Foundation
 import SwiftData
 import XCTest
 @testable import Diary
@@ -67,6 +68,70 @@ final class SyncCoordinatorTests: XCTestCase {
         XCTAssertEqual(entries.count, 1)
         XCTAssertEqual(entries.first?.title, "Queued")
         XCTAssertEqual(entries.first?.tags, ["offline"])
+    }
+
+    func testCreateEntryFlushRemovesOptimisticLocalCopy() async throws {
+        let context = try makeContext()
+        let appState = makeAppState()
+        appState.serverURLString = "https://diary.test"
+        appState.accessToken = "test-token"
+        appState.saveSettings()
+
+        MockURLProtocol.requestHandler = { request in
+            let body = """
+            {
+              "entry": {
+                "id": "server-entry-1",
+                "created_at": "2026-06-23T14:31:00.000Z",
+                "updated_at": "2026-06-23T14:31:01.000Z",
+                "server_revision": "rev-server-1",
+                "title": "Hello today",
+                "excerpt": "Hello today",
+                "body_markdown": "Hello today",
+                "source_path": "entries/2026/06/2026-06-23-server-entry-1.md",
+                "tags": [],
+                "people": [],
+                "subject_details": [],
+                "attachments": []
+              }
+            }
+            """
+            return (
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 201,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )!,
+                Data(body.utf8)
+            )
+        }
+        URLProtocol.registerClass(MockURLProtocol.self)
+        defer {
+            URLProtocol.unregisterClass(MockURLProtocol.self)
+            MockURLProtocol.requestHandler = nil
+        }
+
+        let coordinator = SyncCoordinator()
+        let draft = EntryWriteDraft(
+            createdAt: Date(timeIntervalSinceReferenceDate: 804_000_000),
+            title: "Hello today",
+            bodyMarkdown: "Hello today",
+            people: [],
+            tags: []
+        )
+
+        let entryID = try await coordinator.createEntry(
+            draft: draft,
+            modelContext: context,
+            appState: appState
+        )
+
+        let entries = try context.fetch(FetchDescriptor<DiaryEntry>())
+        XCTAssertEqual(entryID, "server-entry-1")
+        XCTAssertEqual(entries.map(\.id), ["server-entry-1"])
+        XCTAssertFalse(entries.contains { $0.id.hasPrefix("local-") })
+        XCTAssertTrue(try context.fetch(FetchDescriptor<PendingChange>()).isEmpty)
     }
 
     func testDeleteLocalQueuedEntryClearsItWithoutCallingServer() async throws {
@@ -533,6 +598,36 @@ final class DiaryIntentActionsTests: XCTestCase {
             byteCount: data.count
         )
     }
+}
+
+private final class MockURLProtocol: URLProtocol {
+    static var requestHandler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        request.url?.host == "diary.test"
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        guard let requestHandler = Self.requestHandler else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+
+        do {
+            let (response, data) = try requestHandler(request)
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    override func stopLoading() {}
 }
 
 @MainActor
