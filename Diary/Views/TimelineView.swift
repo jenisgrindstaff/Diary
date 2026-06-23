@@ -20,6 +20,7 @@ struct TimelineView: View {
     @State private var searchText = ""
     @State private var localSearchEntries: [DiaryEntry] = []
     @State private var serverSearchState = TimelineServerSearchState.idle
+    @State private var isShowingSettings = false
 
     private let localSearchLimit = 500
 
@@ -139,6 +140,9 @@ struct TimelineView: View {
             .navigationDestination(for: String.self) { entryID in
                 EntryDetailResolver(entryID: entryID)
             }
+            .navigationDestination(isPresented: $isShowingSettings) {
+                SettingsView()
+            }
             .sheet(item: $composerMode, onDismiss: {
                 Task {
                     await reloadTimeline()
@@ -167,39 +171,33 @@ struct TimelineView: View {
                 presentNewEntryIfRequested()
             }
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
                     Button("Add Today", systemImage: "text.badge.plus") {
                         composerMode = .quick
                     }
                     .accessibilityHint("Quickly appends text to today's diary entry.")
-                }
 
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Full Entry", systemImage: "square.and.pencil") {
-                        composerMode = .full
-                    }
-                    .accessibilityHint("Creates a diary entry with date, metadata, and media.")
-                }
-
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Sync", systemImage: appState.syncStatus.symbolName) {
-                        Task {
-                            await syncCoordinator.sync(modelContext: modelContext, appState: appState)
-                            await reloadTimeline()
-                            DiaryWidgetPublisher.refresh(modelContext: modelContext)
+                    Menu {
+                        Button("Full Entry", systemImage: "square.and.pencil") {
+                            composerMode = .full
                         }
-                    }
-                    .disabled(syncCoordinator.isSyncing)
-                    .accessibilityHint("Downloads the latest entries from the Markdown diary server.")
-                }
 
-                ToolbarItem(placement: .topBarTrailing) {
-                    NavigationLink {
-                        SettingsView()
+                        Button("Sync", systemImage: appState.syncStatus.symbolName) {
+                            Task {
+                                await syncCoordinator.sync(modelContext: modelContext, appState: appState)
+                                await reloadTimeline()
+                                DiaryWidgetPublisher.refresh(modelContext: modelContext)
+                            }
+                        }
+                        .disabled(syncCoordinator.isSyncing)
+
+                        Button("Settings", systemImage: "gear") {
+                            isShowingSettings = true
+                        }
                     } label: {
-                        Label("Settings", systemImage: "gear")
+                        Label("More", systemImage: "ellipsis.circle")
                     }
-                    .accessibilityHint("Opens diary settings.")
+                    .accessibilityHint("Shows full entry, sync, and settings actions.")
                 }
             }
             .safeAreaInset(edge: .bottom) {
