@@ -341,6 +341,40 @@ final class DiaryIntentActionsTests: XCTestCase {
         XCTAssertEqual(try context.fetch(FetchDescriptor<DiaryEntry>()).count, 1)
     }
 
+    func testAppendToTodayQueuesMediaForExistingEntry() async throws {
+        let context = try makeContext()
+        let now = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        let todayEntry = DiaryEntry(
+            id: "entry-today",
+            createdAt: now,
+            updatedAt: now,
+            serverRevision: "rev-1",
+            title: "Today",
+            excerpt: "Morning",
+            bodyMarkdown: "Morning."
+        )
+        context.insert(todayEntry)
+        try context.save()
+
+        let media = try makeMediaUploadDraft(filename: "quick-photo.jpg", contentType: "image/jpeg")
+        let appended = try await DiaryIntentActions.appendToToday(
+            text: "Photo from the park.",
+            now: now.addingTimeInterval(3600),
+            media: [media],
+            context: context,
+            appState: makeAppState(),
+            coordinator: SyncCoordinator()
+        )
+
+        let pendingChanges = try context.fetch(FetchDescriptor<PendingChange>())
+
+        XCTAssertTrue(appended)
+        XCTAssertEqual(pendingChanges.count, 1)
+        XCTAssertEqual(pendingChanges.first?.kind, PendingChangeKind.updateEntry.rawValue)
+        XCTAssertEqual(pendingChanges.first?.entryID, "entry-today")
+        XCTAssertTrue(pendingChanges.first?.summary.contains("1 media added") == true)
+    }
+
     func testAppendToTodayCreatesEntryWhenNoneToday() async throws {
         let context = try makeContext()
         let now = Date(timeIntervalSinceReferenceDate: 800_000_000)
@@ -367,6 +401,29 @@ final class DiaryIntentActionsTests: XCTestCase {
 
         XCTAssertFalse(appended, "should create a new entry when none exists for today")
         XCTAssertEqual(try context.fetch(FetchDescriptor<DiaryEntry>()).count, 2)
+    }
+
+    func testAppendToTodayQueuesMediaForNewEntry() async throws {
+        let context = try makeContext()
+        let now = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        let media = try makeMediaUploadDraft(filename: "first-photo.jpg", contentType: "image/jpeg")
+
+        let appended = try await DiaryIntentActions.appendToToday(
+            text: "Started with a photo.",
+            now: now,
+            media: [media],
+            context: context,
+            appState: makeAppState(),
+            coordinator: SyncCoordinator()
+        )
+
+        let pendingChanges = try context.fetch(FetchDescriptor<PendingChange>())
+
+        XCTAssertFalse(appended)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<DiaryEntry>()).count, 1)
+        XCTAssertEqual(pendingChanges.count, 1)
+        XCTAssertEqual(pendingChanges.first?.kind, PendingChangeKind.createEntry.rawValue)
+        XCTAssertTrue(pendingChanges.first?.summary.contains("1 media added") == true)
     }
 
     func testSearchMatchesFoldedTermsAndIgnoresTombstones() async throws {
@@ -415,6 +472,22 @@ final class DiaryIntentActionsTests: XCTestCase {
         let defaults = UserDefaults(suiteName: suiteName)!
         defaults.removePersistentDomain(forName: suiteName)
         return AppState(defaults: defaults, keychain: KeychainStore(service: suiteName))
+    }
+
+    private func makeMediaUploadDraft(filename: String, contentType: String) throws -> MediaUploadDraft {
+        let directory = FileManager.default.temporaryDirectory
+            .appending(path: "diary-test-media-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appending(path: filename)
+        let data = Data("media".utf8)
+        try data.write(to: url)
+        return MediaUploadDraft(
+            id: UUID().uuidString,
+            filename: filename,
+            contentType: contentType,
+            fileURL: url,
+            byteCount: data.count
+        )
     }
 }
 

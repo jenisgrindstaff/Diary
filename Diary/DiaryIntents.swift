@@ -26,6 +26,7 @@ enum DiaryIntentActions {
         text: String,
         title: String?,
         now: Date = .now,
+        media: [MediaUploadDraft] = [],
         context: ModelContext,
         appState: AppState,
         coordinator: SyncCoordinator
@@ -37,7 +38,7 @@ enum DiaryIntentActions {
             people: [],
             tags: []
         )
-        _ = try await coordinator.createEntry(draft: draft, modelContext: context, appState: appState)
+        _ = try await coordinator.createEntry(draft: draft, media: media, modelContext: context, appState: appState)
     }
 
     /// Appends to today's most recent entry, or starts one if none exists.
@@ -47,6 +48,7 @@ enum DiaryIntentActions {
     static func appendToToday(
         text: String,
         now: Date = .now,
+        media: [MediaUploadDraft] = [],
         context: ModelContext,
         appState: AppState,
         coordinator: SyncCoordinator
@@ -59,7 +61,15 @@ enum DiaryIntentActions {
         descriptor.fetchLimit = 1
 
         guard let entry = try context.fetch(descriptor).first else {
-            try await createEntry(text: text, title: nil, now: now, context: context, appState: appState, coordinator: coordinator)
+            try await createEntry(
+                text: text,
+                title: nil,
+                now: now,
+                media: media,
+                context: context,
+                appState: appState,
+                coordinator: coordinator
+            )
             return false
         }
 
@@ -72,7 +82,13 @@ enum DiaryIntentActions {
             tags: entry.tags
         )
         do {
-            try await coordinator.updateEntry(id: entry.id, draft: draft, modelContext: context, appState: appState)
+            try await coordinator.updateEntry(
+                id: entry.id,
+                draft: draft,
+                media: media,
+                modelContext: context,
+                appState: appState
+            )
         } catch {
             // enqueueUpdate already persisted the change; a conflict or network
             // error during the immediate flush reconciles on the next sync.

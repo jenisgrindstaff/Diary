@@ -493,10 +493,16 @@ private enum ThumbnailLoader {
                 generator.appliesPreferredTrackTransform = true
                 generator.maximumSize = CGSize(width: 480, height: 480)
 
-                guard let cgImage = try? generator.copyCGImage(at: .zero, actualTime: nil) else {
-                    return nil
+                return await withCheckedContinuation { continuation in
+                    generator.generateCGImageAsynchronously(for: .zero) { cgImage, _, error in
+                        guard error == nil, let cgImage else {
+                            continuation.resume(returning: nil)
+                            return
+                        }
+
+                        continuation.resume(returning: UIImage(cgImage: cgImage))
+                    }
                 }
-                return UIImage(cgImage: cgImage)
             }
 
             return nil

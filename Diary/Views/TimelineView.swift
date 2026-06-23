@@ -583,12 +583,32 @@ private struct QuickAppendView: View {
     let syncCoordinator: SyncCoordinator
 
     @State private var text = ""
+    @State private var selectedItems: [PhotosPickerItem] = []
+    @State private var selectedMedia: [MediaUploadDraft] = []
+    @State private var isLoadingMedia = false
     @State private var isSaving = false
     @State private var errorMessage: String?
+    @State private var isConfirmingDiscard = false
+    @State private var savedMessage: String?
     @FocusState private var isTextFocused: Bool
 
+    init(syncCoordinator: SyncCoordinator) {
+        self.syncCoordinator = syncCoordinator
+        _text = State(initialValue: QuickAppendDraftStore.load())
+    }
+
     private var canSave: Bool {
-        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isSaving
+        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        && !isSaving
+        && !isLoadingMedia
+    }
+
+    private var hasDraftContent: Bool {
+        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var hasTemporaryMedia: Bool {
+        !selectedMedia.isEmpty
     }
 
     var body: some View {
@@ -610,7 +630,37 @@ private struct QuickAppendView: View {
                         }
                 }
 
+                Section("Media") {
+                    PhotosPicker(
+                        selection: $selectedItems,
+                        maxSelectionCount: 5,
+                        matching: .any(of: [.images, .videos])
+                    ) {
+                        Label("Add Photos or Videos", systemImage: "photo.on.rectangle.angled")
+                    }
+                    .disabled(isSaving)
+
+                    if isLoadingMedia {
+                        Label("Preparing media", systemImage: "hourglass")
+                            .foregroundStyle(.secondary)
+                    }
+
+                    SelectedMediaPreviewGrid(media: selectedMedia, remove: removeSelectedMedia)
+                }
+
                 Section {
+                    if let savedMessage {
+                        Label(savedMessage, systemImage: "checkmark.circle")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if hasDraftContent {
+                        Label("Draft saved locally", systemImage: "checkmark.circle")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+
                     Label("Saves locally first, then syncs when the server is reachable.", systemImage: "checkmark.arrow.trianglehead.counterclockwise")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
@@ -619,18 +669,45 @@ private struct QuickAppendView: View {
             .navigationTitle("Add Today")
             .navigationBarTitleDisplayMode(.inline)
             .defaultFocus($isTextFocused, true)
+            .onChange(of: text) { _, newText in
+                QuickAppendDraftStore.save(newText)
+                if !newText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    savedMessage = nil
+                }
+            }
+            .onChange(of: selectedItems) { _, newItems in
+                if !newItems.isEmpty {
+                    savedMessage = nil
+                }
+                Task {
+                    await loadMedia(from: newItems)
+                }
+            }
+            .onDisappear {
+                cleanupSelectedMedia()
+            }
+            .interactiveDismissDisabled(hasTemporaryMedia)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
-                        dismiss()
+                        cancel()
                     }
                     .disabled(isSaving)
                 }
 
                 ToolbarItem(placement: .confirmationAction) {
+                    Button("Add Another") {
+                        Task {
+                            await save(shouldDismiss: false)
+                        }
+                    }
+                    .disabled(!canSave)
+                }
+
+                ToolbarItem(placement: .confirmationAction) {
                     Button("Add") {
                         Task {
-                            await save()
+                            await save(shouldDismiss: true)
                         }
                     }
                     .disabled(!canSave)
@@ -640,6 +717,22 @@ private struct QuickAppendView: View {
                 Button("OK", role: .cancel) { }
             } message: {
                 Text(errorMessage ?? "The entry could not be saved.")
+            }
+            .confirmationDialog(
+                "Discard Quick Entry?",
+                isPresented: $isConfirmingDiscard,
+                titleVisibility: .visible
+            ) {
+                Button("Discard Draft", role: .destructive) {
+                    QuickAppendDraftStore.clear()
+                    cleanupSelectedMedia()
+                    selectedItems = []
+                    dismiss()
+                }
+
+                Button("Keep Editing", role: .cancel) { }
+            } message: {
+                Text("Your text is saved locally. Selected media is temporary until you add the entry.")
             }
         }
     }
@@ -654,7 +747,7 @@ private struct QuickAppendView: View {
         }
     }
 
-    private func save() async {
+    private func save(shouldDismiss: Bool) async {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
@@ -664,14 +757,59 @@ private struct QuickAppendView: View {
         do {
             _ = try await DiaryIntentActions.appendToToday(
                 text: trimmed,
+                media: selectedMedia,
                 context: modelContext,
                 appState: appState,
                 coordinator: syncCoordinator
             )
-            dismiss()
+            QuickAppendDraftStore.clear()
+            text = ""
+            cleanupSelectedMedia()
+            selectedItems = []
+
+            if shouldDismiss {
+                dismiss()
+            } else {
+                savedMessage = "Added to today"
+                isTextFocused = true
+            }
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    private func cancel() {
+        guard hasDraftContent || hasTemporaryMedia else {
+            dismiss()
+            return
+        }
+
+        isConfirmingDiscard = true
+    }
+
+    private func loadMedia(from items: [PhotosPickerItem]) async {
+        isLoadingMedia = true
+        defer { isLoadingMedia = false }
+
+        cleanupSelectedMedia()
+        do {
+            selectedMedia = try await MediaDraftLoader.loadMedia(from: items)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func removeSelectedMedia(_ media: MediaUploadDraft) {
+        try? FileManager.default.removeItem(at: media.fileURL)
+        selectedMedia.removeAll { $0.id == media.id }
+        selectedItems.removeAll { $0.itemIdentifier == media.id }
+    }
+
+    private func cleanupSelectedMedia() {
+        for media in selectedMedia {
+            try? FileManager.default.removeItem(at: media.fileURL)
+        }
+        selectedMedia = []
     }
 }
 
@@ -903,30 +1041,11 @@ private struct NewEntryView: View {
         defer { isLoadingMedia = false }
 
         cleanupSelectedMedia()
-        var uploads: [MediaUploadDraft] = []
-        for item in items {
-            do {
-                guard let mediaFile = try await item.loadTransferable(type: PickedMediaFile.self) else {
-                    continue
-                }
-
-                let contentType = item.supportedContentTypes.first ?? .data
-                let byteCount = Self.byteCount(for: mediaFile.url)
-                uploads.append(
-                    MediaUploadDraft(
-                        id: item.itemIdentifier ?? UUID().uuidString,
-                        filename: Self.filename(for: contentType),
-                        contentType: contentType.preferredMIMEType ?? "application/octet-stream",
-                        fileURL: mediaFile.url,
-                        byteCount: byteCount
-                    )
-                )
-            } catch {
-                errorMessage = error.localizedDescription
-            }
+        do {
+            selectedMedia = try await MediaDraftLoader.loadMedia(from: items)
+        } catch {
+            errorMessage = error.localizedDescription
         }
-
-        selectedMedia = uploads
     }
 
     private func removeSelectedMedia(_ media: MediaUploadDraft) {
@@ -940,6 +1059,31 @@ private struct NewEntryView: View {
             try? FileManager.default.removeItem(at: media.fileURL)
         }
         selectedMedia = []
+    }
+
+}
+
+private enum MediaDraftLoader {
+    static func loadMedia(from items: [PhotosPickerItem]) async throws -> [MediaUploadDraft] {
+        var uploads: [MediaUploadDraft] = []
+        for item in items {
+            guard let mediaFile = try await item.loadTransferable(type: PickedMediaFile.self) else {
+                continue
+            }
+
+            let contentType = item.supportedContentTypes.first ?? .data
+            uploads.append(
+                MediaUploadDraft(
+                    id: item.itemIdentifier ?? UUID().uuidString,
+                    filename: filename(for: contentType),
+                    contentType: contentType.preferredMIMEType ?? "application/octet-stream",
+                    fileURL: mediaFile.url,
+                    byteCount: byteCount(for: mediaFile.url)
+                )
+            )
+        }
+
+        return uploads
     }
 
     private static func byteCount(for fileURL: URL) -> Int {
@@ -977,6 +1121,27 @@ private struct NewEntryDraft: Codable, Equatable {
     var peopleText: String
     var tagsText: String
     var bodyMarkdown: String
+}
+
+private enum QuickAppendDraftStore {
+    private static let key = "quickAppendDraft"
+
+    static func load() -> String {
+        UserDefaults.standard.string(forKey: key) ?? ""
+    }
+
+    static func save(_ text: String) {
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            clear()
+            return
+        }
+
+        UserDefaults.standard.set(text, forKey: key)
+    }
+
+    static func clear() {
+        UserDefaults.standard.removeObject(forKey: key)
+    }
 }
 
 private enum NewEntryDraftStore {
