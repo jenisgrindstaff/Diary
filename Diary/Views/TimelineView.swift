@@ -948,7 +948,6 @@ private struct TimelineEntryRow: View {
                     }
                 }
 
-                TimelineMetadataStrip(entry: entry)
             }
             .padding(.vertical, 12)
             .padding(.trailing, 2)
@@ -1009,44 +1008,6 @@ private struct TimelineDateRail: View {
         }
 
         return date.formatted(date: .complete, time: .omitted)
-    }
-}
-
-private struct TimelineMetadataStrip: View {
-    let entry: DiaryEntry
-
-    var body: some View {
-        HStack(spacing: 6) {
-            if entry.attachments.count > 0 {
-                TimelineChip(text: "\(entry.attachments.count)", systemImage: "paperclip")
-            }
-
-            ForEach(entry.entryContext.summaryChips.prefix(2), id: \.self) { chip in
-                TimelineChip(text: chip, systemImage: "sparkles")
-            }
-        }
-        .lineLimit(1)
-    }
-}
-
-private struct TimelineChip: View {
-    let text: String
-    let systemImage: String?
-
-    var body: some View {
-        Group {
-            if let systemImage {
-                Label(text, systemImage: systemImage)
-                    .labelStyle(.titleAndIcon)
-            } else {
-                Text(text)
-            }
-        }
-        .font(.caption2.weight(.medium))
-        .foregroundStyle(.secondary)
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background(.quaternary, in: Capsule())
     }
 }
 
