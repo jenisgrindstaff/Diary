@@ -131,6 +131,140 @@ func TestWebProxyAuthProtectsWebButNotAPI(t *testing.T) {
 	}
 }
 
+func TestAdminStatusAPIAndPage(t *testing.T) {
+	srv := testServerWithImport(t)
+	defer srv.Close()
+	srv.cfg.WebAuthHeader = "Remote-User"
+	srv.cfg.WebAuthProxySecret = "proxy-secret"
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/status", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status API got %d body %s", rec.Code, rec.Body.String())
+	}
+
+	var payload AdminStatus
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Paths.VaultDir == "" || payload.Paths.DataDir == "" || payload.Paths.ImportDir == "" {
+		t.Fatalf("expected status paths, got %+v", payload.Paths)
+	}
+	if payload.Counts.Entries == 0 {
+		t.Fatalf("expected indexed entries in status, got %+v", payload.Counts)
+	}
+	if !payload.Auth.APIEnabled || !payload.Auth.WebProxyEnabled || payload.Auth.WebAuthHeader != "Remote-User" {
+		t.Fatalf("unexpected auth status %+v", payload.Auth)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/admin/status", nil)
+	req.Header.Set("Remote-User", "jg")
+	req.Header.Set("X-Diary-Proxy-Secret", "proxy-secret")
+	rec = httptest.NewRecorder()
+	srv.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status page got %d body %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{"Admin Status", "Vault", "Last Reindex", "API token"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("status page missing %q:\n%s", want, body)
+		}
+	}
+}
+
+func TestAdminStatusShowsEmptyVault(t *testing.T) {
+	root := t.TempDir()
+	srv, err := New(Config{
+		Addr:      ":0",
+		VaultDir:  filepath.Join(root, "vault"),
+		ImportDir: filepath.Join(root, "imports"),
+		DataDir:   filepath.Join(root, "data"),
+		APIToken:  "secret",
+	}, slog.New(slog.NewTextHandler(bytes.NewBuffer(nil), nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/status", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	rec := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status API got %d body %s", rec.Code, rec.Body.String())
+	}
+
+	var payload AdminStatus
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Counts.Entries != 0 || payload.LastReindex.EntryCount != 0 {
+		t.Fatalf("expected empty vault counts, got counts=%+v reindex=%+v", payload.Counts, payload.LastReindex)
+	}
+	if payload.Paths.VaultDir != filepath.Join(root, "vault") {
+		t.Fatalf("unexpected vault path %q", payload.Paths.VaultDir)
+	}
+}
+
+func TestHomePaginatesEntriesAndUsesArchiveCounts(t *testing.T) {
+	root := t.TempDir()
+	srv, err := New(Config{
+		Addr:      ":0",
+		VaultDir:  filepath.Join(root, "vault"),
+		ImportDir: filepath.Join(root, "imports"),
+		DataDir:   filepath.Join(root, "data"),
+		APIToken:  "secret",
+	}, slog.New(slog.NewTextHandler(bytes.NewBuffer(nil), nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+
+	base := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	for i := 0; i < 55; i++ {
+		_, err := diary.CreateEntry(srv.cfg.VaultDir, diary.CreateEntryInput{
+			CreatedAt:    base.AddDate(0, 0, i),
+			Title:        "Paged Entry " + itoa(i+1),
+			BodyMarkdown: "Body for paged entry.",
+			Now:          base.AddDate(0, 0, i),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := srv.Reindex(); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("home got %d body %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "55 Entries") || !strings.Contains(body, "Page 1 of 2") || !strings.Contains(body, "Next") {
+		t.Fatalf("expected first page pagination, got:\n%s", body)
+	}
+	if !strings.Contains(body, "June 2026") || !strings.Contains(body, ">30<") {
+		t.Fatalf("expected SQL archive count for June 2026, got:\n%s", body)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/?page=2", nil)
+	rec = httptest.NewRecorder()
+	srv.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("home page 2 got %d body %s", rec.Code, rec.Body.String())
+	}
+	body = rec.Body.String()
+	if !strings.Contains(body, "Page 2 of 2") || !strings.Contains(body, "Previous") {
+		t.Fatalf("expected second page pagination, got:\n%s", body)
+	}
+}
+
 func TestShareRouteBypassesWebProxyAuth(t *testing.T) {
 	srv := testServerWithImport(t)
 	defer srv.Close()

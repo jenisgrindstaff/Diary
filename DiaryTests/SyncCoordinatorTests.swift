@@ -241,6 +241,64 @@ final class SyncCoordinatorTests: XCTestCase {
         XCTAssertTrue(events.contains { $0.summary == "Queued change discarded" })
     }
 
+    func testMissingServerEntryLeavesPendingUpdateWithHelpfulMessage() async throws {
+        let context = try makeContext()
+        let appState = makeAppState()
+        appState.serverURLString = "https://diary.test"
+        appState.accessToken = "test-token"
+        appState.saveSettings()
+
+        let coordinator = SyncCoordinator()
+        let entry = DiaryEntry(
+            id: "missing-entry",
+            createdAt: Date(timeIntervalSinceReferenceDate: 804_000_000),
+            updatedAt: Date(timeIntervalSinceReferenceDate: 804_000_100),
+            serverRevision: "rev-1",
+            title: "Original",
+            excerpt: "Original body",
+            bodyMarkdown: "Original body"
+        )
+        context.insert(entry)
+        try context.save()
+
+        MockURLProtocol.requestHandler = { request in
+            XCTAssertEqual(request.httpMethod, "PATCH")
+            return (
+                HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 400,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )!,
+                Data(#"{"error":"not found"}"#.utf8)
+            )
+        }
+        URLProtocol.registerClass(MockURLProtocol.self)
+        defer {
+            URLProtocol.unregisterClass(MockURLProtocol.self)
+            MockURLProtocol.requestHandler = nil
+        }
+
+        let draft = EntryWriteDraft(
+            createdAt: entry.createdAt,
+            expectedServerRevision: entry.serverRevision,
+            title: "Local Edit",
+            bodyMarkdown: "Local body"
+        )
+
+        try await coordinator.updateEntry(
+            id: entry.id,
+            draft: draft,
+            modelContext: context,
+            appState: appState
+        )
+
+        let change = try XCTUnwrap(context.fetch(FetchDescriptor<PendingChange>()).first)
+        XCTAssertEqual(change.status, PendingChangeStatus.failed.rawValue)
+        XCTAssertEqual(change.displayError, "The server could not find this entry. Retry after a sync, or discard this local queued change.")
+        XCTAssertEqual(appState.syncStatus, .failed("The server could not find this entry. Sync again to refresh, or discard the queued local change."))
+    }
+
     func testFullSyncClearsCursorBeforeNetworkValidation() async throws {
         let context = try makeContext()
         let appState = makeAppState()

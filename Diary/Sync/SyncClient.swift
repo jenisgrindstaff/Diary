@@ -253,6 +253,16 @@ enum SyncClientError: LocalizedError, Equatable {
         case .entryConflict:
             return "This entry changed on the server. Reload the latest copy before saving."
         case .httpStatus(let status, let message):
+            if (status == 400 && message?.localizedCaseInsensitiveContains("not found") == true)
+                || status == 404 {
+                return "The server could not find this entry. Sync again to refresh, or discard the queued local change."
+            }
+            if status == 413 {
+                return "The selected media is too large for the diary server."
+            }
+            if status >= 500 {
+                return "The diary server had a problem. Try again after checking the server."
+            }
             if let message, !message.isEmpty {
                 return "Server returned HTTP \(status): \(message)"
             }

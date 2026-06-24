@@ -39,6 +39,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /share/{token}", s.handleShare)
 	mux.Handle("POST /entries/{id}/attachments", web(s.handleWebAttachMedia))
 	mux.Handle("GET /assets/{id}", web(s.handleWebAsset))
+	mux.Handle("GET /admin/status", web(s.handleAdminStatusPage))
 	mux.Handle("POST /admin/import", web(s.handleWebImport))
 	mux.Handle("POST /admin/reindex", web(s.handleWebReindex))
 	mux.Handle("GET /api/v1/entries", s.auth(http.HandlerFunc(s.handleEntries)))
@@ -51,6 +52,7 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("GET /api/v1/search", s.auth(http.HandlerFunc(s.handleSearch)))
 	mux.Handle("GET /api/v1/assets/{id}", s.auth(http.HandlerFunc(s.handleAsset)))
 	mux.Handle("POST /api/v1/sync/register-device", s.auth(http.HandlerFunc(s.handleRegisterDevice)))
+	mux.Handle("GET /api/v1/admin/status", s.auth(http.HandlerFunc(s.handleAdminStatusAPI)))
 	mux.Handle("POST /api/v1/admin/import", s.auth(http.HandlerFunc(s.handleImport)))
 	mux.Handle("POST /api/v1/admin/reindex", s.auth(http.HandlerFunc(s.handleReindex)))
 
@@ -273,7 +275,10 @@ func (s *Server) handleReindex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "reindexed"})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":  "reindexed",
+		"reindex": s.lastReindexResult(),
+	})
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

@@ -87,7 +87,9 @@ extension PendingChange {
             return "The server copy changed before this edit synced. Resolve lets you compare both versions."
         }
 
-        if lastError.localizedCaseInsensitiveContains("HTTP 404") {
+        if lastError.localizedCaseInsensitiveContains("HTTP 404")
+            || lastError.localizedCaseInsensitiveContains("could not find this entry")
+            || lastError.localizedCaseInsensitiveContains("not found") {
             switch kind {
             case PendingChangeKind.deleteEntry.rawValue:
                 return "The server no longer has this entry. Retry will clear the queued delete."

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"diary/server/internal/diary"
+	"diary/server/internal/store"
 	"github.com/yuin/goldmark"
 )
 
@@ -25,6 +26,8 @@ type homePageData struct {
 	Month        string
 	Message      string
 	TotalEntries int
+	ResultCount  int
+	Pagination   paginationData
 	ImportFiles  []string
 	CSRFToken    string
 	Public       bool
@@ -65,36 +68,56 @@ type archiveCount struct {
 	Count int
 }
 
-func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
-	entries, err := s.store.Entries()
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, publicMessage(err))
-		return
-	}
+type paginationData struct {
+	Page       int
+	TotalPages int
+	HasPrev    bool
+	HasNext    bool
+	PrevURL    string
+	NextURL    string
+}
 
+const webHomePageSize = 50
+
+func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 	query := strings.TrimSpace(r.URL.Query().Get("q"))
 	year := strings.TrimSpace(r.URL.Query().Get("year"))
 	month := strings.TrimSpace(r.URL.Query().Get("month"))
 	message := strings.TrimSpace(r.URL.Query().Get("message"))
-	searchEntries := entries
-	if query != "" {
-		searchEntries, err = s.store.Search(query)
-		if err != nil {
-			message = "Search failed: " + publicMessage(err)
-			searchEntries = []diary.Entry{}
-		}
+	page := parsePage(r.URL.Query().Get("page"))
+
+	entries, resultCount, err := s.store.EntriesPage(store.EntryListOptions{
+		Query:  query,
+		Year:   year,
+		Month:  month,
+		Limit:  webHomePageSize,
+		Offset: (page - 1) * webHomePageSize,
+	})
+	if err != nil {
+		message = "List failed: " + publicMessage(err)
+		entries = []diary.Entry{}
 	}
-	filtered := listItems(filterEntries(searchEntries, year, month))
+
+	archiveRows, err := s.store.ArchiveCounts()
+	if err != nil {
+		message = "Archive failed: " + publicMessage(err)
+	}
+	totalEntries, err := s.store.EntryCount()
+	if err != nil {
+		message = "Count failed: " + publicMessage(err)
+	}
 	importFiles, _ := markdownFiles(s.cfg.ImportDir)
 
 	data := homePageData{
-		Entries:      filtered,
-		Archive:      archiveCounts(entries),
+		Entries:      listItems(entries),
+		Archive:      archiveCountsFromStore(archiveRows),
 		Query:        query,
 		Year:         year,
 		Month:        month,
 		Message:      message,
-		TotalEntries: len(entries),
+		TotalEntries: totalEntries,
+		ResultCount:  resultCount,
+		Pagination:   pagination(query, year, month, page, resultCount),
 		ImportFiles:  importFiles,
 		CSRFToken:    ensureCSRFToken(w, r),
 	}
@@ -418,11 +441,13 @@ func (s *Server) handleWebImport(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/?message="+urlMessage("Reindex failed: "+publicMessage(err)), http.StatusSeeOther)
 		return
 	}
+	reindex := s.lastReindexResult()
 
 	message := "Imported " + itoa(result.ImportedEntries) + " entries"
 	if result.SkippedEntries > 0 {
 		message += ", skipped " + itoa(result.SkippedEntries)
 	}
+	message += "; indexed " + itoa(reindex.EntryCount)
 	http.Redirect(w, r, "/?message="+urlMessage(message), http.StatusSeeOther)
 }
 
@@ -435,8 +460,13 @@ func (s *Server) handleWebReindex(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/?message="+urlMessage("Reindex failed: "+publicMessage(err)), http.StatusSeeOther)
 		return
 	}
+	reindex := s.lastReindexResult()
 
-	http.Redirect(w, r, "/?message="+urlMessage("Reindexed vault"), http.StatusSeeOther)
+	message := "Reindexed " + itoa(reindex.EntryCount) + " entries"
+	if reindex.BackfilledSubjectDetails > 0 {
+		message += ", backfilled ages in " + itoa(reindex.BackfilledSubjectDetails)
+	}
+	http.Redirect(w, r, "/?message="+urlMessage(message), http.StatusSeeOther)
 }
 
 func filterEntries(entries []diary.Entry, year string, month string) []diary.Entry {
@@ -500,6 +530,75 @@ func archiveCounts(entries []diary.Entry) []archiveCount {
 	})
 
 	return archive
+}
+
+func archiveCountsFromStore(counts []store.ArchiveCount) []archiveCount {
+	archive := make([]archiveCount, 0, len(counts))
+	for _, count := range counts {
+		date, err := time.Parse("2006-01", count.Year+"-"+count.Month)
+		if err != nil {
+			continue
+		}
+		archive = append(archive, archiveCount{
+			Year:  count.Year,
+			Month: count.Month,
+			Label: date.Format("January 2006"),
+			Count: count.Count,
+		})
+	}
+	return archive
+}
+
+func parsePage(value string) int {
+	page, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || page < 1 {
+		return 1
+	}
+	return page
+}
+
+func pagination(query string, year string, month string, page int, total int) paginationData {
+	if page < 1 {
+		page = 1
+	}
+	totalPages := 0
+	if total > 0 {
+		totalPages = (total + webHomePageSize - 1) / webHomePageSize
+	}
+	data := paginationData{
+		Page:       page,
+		TotalPages: totalPages,
+		HasPrev:    page > 1,
+		HasNext:    totalPages > 0 && page < totalPages,
+	}
+	if data.HasPrev {
+		data.PrevURL = pageURL(query, year, month, page-1)
+	}
+	if data.HasNext {
+		data.NextURL = pageURL(query, year, month, page+1)
+	}
+	return data
+}
+
+func pageURL(query string, year string, month string, page int) string {
+	values := url.Values{}
+	if query != "" {
+		values.Set("q", query)
+	}
+	if year != "" {
+		values.Set("year", year)
+	}
+	if month != "" {
+		values.Set("month", month)
+	}
+	if page > 1 {
+		values.Set("page", strconv.Itoa(page))
+	}
+	encoded := values.Encode()
+	if encoded == "" {
+		return "/"
+	}
+	return "/?" + encoded
 }
 
 func markdownFiles(root string) ([]string, error) {
@@ -617,6 +716,9 @@ func contextChips(context diary.EntryContext) []string {
 
 var pageTemplate = template.Must(template.New("pages").Funcs(template.FuncMap{
 	"date": func(t time.Time) string {
+		if t.IsZero() {
+			return "Never"
+		}
 		return t.Format("Jan 2, 2006")
 	},
 	"month": func(t time.Time) string {
@@ -946,6 +1048,23 @@ const pageTemplates = `
       border-radius: 8px; background: var(--panel); color: var(--text);
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px;
     }
+    .pager {
+      display: flex; justify-content: space-between; align-items: center;
+      gap: 12px; margin: 18px 0 0; color: var(--muted);
+    }
+    .pager .controls { display: flex; gap: 8px; }
+    .status-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 14px;
+    }
+    .status-card {
+      border: 1px solid var(--line); border-radius: 12px; padding: 14px;
+      background: var(--panel);
+    }
+    .status-card h2 { margin: 0 0 10px; font-size: 16px; }
+    .status-card dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 7px 12px; }
+    .status-card dt { color: var(--muted); }
+    .status-card dd { margin: 0; overflow-wrap: anywhere; }
     .editor-toolbar { display: flex; justify-content: flex-end; margin-bottom: 6px; }
     .hint { margin-top: 6px; font-size: 13px; }
     textarea.drag { outline: 2px dashed var(--accent); outline-offset: 2px; }
@@ -963,6 +1082,7 @@ const pageTemplates = `
     {{if not .Public}}
     <div class="actions">
       <a class="button primary" href="/entries/new">New Entry</a>
+      <a class="button" href="/admin/status">Status</a>
       <form method="post" action="/admin/import"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button class="primary" type="submit">Import</button></form>
       <form method="post" action="/admin/reindex"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button type="submit">Reindex</button></form>
     </div>
@@ -1055,7 +1175,7 @@ const pageTemplates = `
     {{end}}
   </aside>
   <section>
-    <h1>{{len .Entries}} Entries</h1>
+    <h1>{{.ResultCount}} Entries</h1>
     <div class="list">
       {{$lastMonth := ""}}
       {{range .Entries}}
@@ -1073,8 +1193,73 @@ const pageTemplates = `
         <p class="muted">No entries match this filter.</p>
       {{end}}
     </div>
+    {{if gt .Pagination.TotalPages 1}}
+      <nav class="pager" aria-label="Entry pages">
+        <span>Page {{.Pagination.Page}} of {{.Pagination.TotalPages}}</span>
+        <span class="controls">
+          {{if .Pagination.HasPrev}}<a class="button" href="{{.Pagination.PrevURL}}">Previous</a>{{end}}
+          {{if .Pagination.HasNext}}<a class="button" href="{{.Pagination.NextURL}}">Next</a>{{end}}
+        </span>
+      </nav>
+    {{end}}
   </section>
 </div>
+{{template "layoutEnd" .}}
+{{end}}
+
+{{define "adminStatus"}}
+{{template "layoutStart" .}}
+<section class="detail">
+  <h1>Admin Status</h1>
+  <div class="status-grid">
+    <article class="status-card">
+      <h2>Paths</h2>
+      <dl>
+        <dt>Vault</dt><dd><code>{{.Status.Paths.VaultDir}}</code></dd>
+        <dt>Data</dt><dd><code>{{.Status.Paths.DataDir}}</code></dd>
+        <dt>Imports</dt><dd><code>{{.Status.Paths.ImportDir}}</code></dd>
+        <dt>SQLite</dt><dd><code>{{.Status.Paths.DBPath}}</code></dd>
+      </dl>
+    </article>
+    <article class="status-card">
+      <h2>Counts</h2>
+      <dl>
+        <dt>Entries</dt><dd>{{.Status.Counts.Entries}}</dd>
+        <dt>Assets</dt><dd>{{.Status.Counts.Assets}}</dd>
+        <dt>Tombstones</dt><dd>{{.Status.Counts.Tombstones}}</dd>
+      </dl>
+    </article>
+    <article class="status-card">
+      <h2>People</h2>
+      <dl>
+        <dt>File</dt><dd>{{if .Status.People.Exists}}Found{{else}}Missing{{end}}</dd>
+        <dt>Path</dt><dd><code>{{.Status.People.Path}}</code></dd>
+        <dt>People</dt><dd>{{.Status.People.Count}}</dd>
+        {{if .Status.People.Message}}<dt>Message</dt><dd>{{.Status.People.Message}}</dd>{{end}}
+      </dl>
+    </article>
+    <article class="status-card">
+      <h2>Auth</h2>
+      <dl>
+        <dt>API token</dt><dd>{{if .Status.Auth.APIEnabled}}Enabled{{else}}Disabled{{end}}</dd>
+        <dt>Web proxy</dt><dd>{{if .Status.Auth.WebProxyEnabled}}Enabled{{else}}Disabled{{end}}</dd>
+        <dt>Header</dt><dd>{{if .Status.Auth.WebAuthHeader}}<code>{{.Status.Auth.WebAuthHeader}}</code>{{else}}None{{end}}</dd>
+        <dt>Proxy secret</dt><dd>{{if .Status.Auth.WebProxySecretSet}}Set{{else}}Not set{{end}}</dd>
+      </dl>
+    </article>
+    <article class="status-card">
+      <h2>Last Reindex</h2>
+      <dl>
+        <dt>Started</dt><dd>{{date .Status.LastReindex.StartedAt}}</dd>
+        <dt>Finished</dt><dd>{{date .Status.LastReindex.FinishedAt}}</dd>
+        <dt>Entries</dt><dd>{{.Status.LastReindex.EntryCount}}</dd>
+        <dt>Tombstones</dt><dd>{{.Status.LastReindex.TombstoneCount}}</dd>
+        <dt>Age backfills</dt><dd>{{.Status.LastReindex.BackfilledSubjectDetails}}</dd>
+        {{if .Status.LastReindex.Error}}<dt>Error</dt><dd>{{.Status.LastReindex.Error}}</dd>{{end}}
+      </dl>
+    </article>
+  </div>
+</section>
 {{template "layoutEnd" .}}
 {{end}}
 

@@ -70,15 +70,16 @@ final class SyncCoordinator {
             lastCompletedAt = .now
             appState.syncStatus = .synced(lastCompletedAt ?? .now)
         } catch {
+            let message = userMessage(for: error)
             recordEvent(
                 kind: .fullSync,
                 status: .failed,
                 summary: "Sync failed",
-                detail: error.localizedDescription,
+                detail: message,
                 modelContext: modelContext
             )
-            lastError = error.localizedDescription
-            appState.syncStatus = .failed(error.localizedDescription)
+            lastError = message
+            appState.syncStatus = .failed(message)
         }
 
         isSyncing = false
@@ -89,8 +90,9 @@ final class SyncCoordinator {
             try resetSyncCursor(modelContext: modelContext)
             try resetLocalServerCache(modelContext: modelContext)
         } catch {
-            lastError = error.localizedDescription
-            appState.syncStatus = .failed(error.localizedDescription)
+            let message = userMessage(for: error)
+            lastError = message
+            appState.syncStatus = .failed(message)
             return
         }
 
@@ -158,7 +160,7 @@ final class SyncCoordinator {
             appState.markDeviceRegistered(response)
             appState.syncStatus = .idle
         } catch {
-            appState.syncStatus = .failed(error.localizedDescription)
+            appState.syncStatus = .failed(userMessage(for: error))
         }
     }
 
@@ -342,8 +344,9 @@ final class SyncCoordinator {
             lastCompletedAt = .now
             appState.syncStatus = .synced(lastCompletedAt ?? .now)
         } catch {
-            lastError = error.localizedDescription
-            appState.syncStatus = .failed(error.localizedDescription)
+            let message = userMessage(for: error)
+            lastError = message
+            appState.syncStatus = .failed(message)
             if changeID != nil, shouldThrowAfterQueueAttempt(error) {
                 throw error
             }
@@ -356,6 +359,42 @@ final class SyncCoordinator {
         }
 
         return false
+    }
+
+    private func userMessage(for error: Error) -> String {
+        if let clientError = error as? SyncClientError,
+           let description = clientError.errorDescription {
+            return description
+        }
+        if let coordinatorError = error as? SyncCoordinatorError,
+           let description = coordinatorError.errorDescription {
+            return description
+        }
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .notConnectedToInternet, .networkConnectionLost:
+                return "The diary server is not reachable because this device appears to be offline."
+            case .cannotFindHost, .cannotConnectToHost, .timedOut:
+                return "The diary server is not reachable. Check the server URL and network connection."
+            case .secureConnectionFailed, .serverCertificateUntrusted, .serverCertificateHasBadDate, .serverCertificateNotYetValid:
+                return "The secure connection to the diary server failed. Check HTTPS and the proxy certificate."
+            default:
+                break
+            }
+        }
+
+        let message = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        if message.localizedCaseInsensitiveContains("not found") {
+            return "The server could not find this entry. Sync again to refresh, or discard the queued local change."
+        }
+        if message.localizedCaseInsensitiveContains("unauthorized")
+            || message.localizedCaseInsensitiveContains("access token") {
+            return "The diary server rejected the saved access token. Re-register this device in Settings."
+        }
+        if message.isEmpty {
+            return "The sync operation could not be completed."
+        }
+        return message
     }
 
     private func enqueueCreate(
@@ -488,8 +527,9 @@ final class SyncCoordinator {
                 recordPendingFailure(change: change, detail: message, modelContext: modelContext)
                 throw SyncCoordinatorError.entryConflict(message)
             } catch {
-                mark(change: change, failedWith: error.localizedDescription, modelContext: modelContext)
-                recordPendingFailure(change: change, detail: error.localizedDescription, modelContext: modelContext)
+                let message = userMessage(for: error)
+                mark(change: change, failedWith: message, modelContext: modelContext)
+                recordPendingFailure(change: change, detail: message, modelContext: modelContext)
                 throw error
             }
         }

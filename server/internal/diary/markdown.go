@@ -180,11 +180,21 @@ func ReadEntry(vaultDir string, path string) (Entry, error) {
 }
 
 func ReadVault(vaultDir string) ([]Entry, error) {
+	entries, _, err := ReadVaultWithStats(vaultDir)
+	return entries, err
+}
+
+type ReadVaultStats struct {
+	BackfilledSubjectDetails int
+}
+
+func ReadVaultWithStats(vaultDir string) ([]Entry, ReadVaultStats, error) {
 	var entries []Entry
+	var stats ReadVaultStats
 	entriesDir := filepath.Join(vaultDir, "entries")
 	people, err := LoadPeople(vaultDir)
 	if err != nil {
-		return nil, err
+		return nil, stats, err
 	}
 
 	err = filepath.WalkDir(entriesDir, func(path string, d fs.DirEntry, err error) error {
@@ -208,19 +218,20 @@ func ReadVault(vaultDir string) ([]Entry, error) {
 			if err := writeEntryFile(enriched.VaultPath, data); err != nil {
 				return err
 			}
+			stats.BackfilledSubjectDetails++
 		}
 		entry = enriched
 		entries = append(entries, entry)
 		return nil
 	})
 	if err != nil && !os.IsNotExist(err) {
-		return nil, err
+		return nil, stats, err
 	}
 
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].CreatedAt.After(entries[j].CreatedAt)
 	})
-	return entries, nil
+	return entries, stats, nil
 }
 
 func subjectDetailsEqual(a []SubjectDetail, b []SubjectDetail) bool {
