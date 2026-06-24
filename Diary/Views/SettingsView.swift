@@ -7,6 +7,7 @@ struct SettingsView: View {
     @Environment(AppState.self) private var appState
     @Environment(AppLock.self) private var appLock
     @Query(sort: \PendingChange.createdAt, order: .forward) private var pendingChanges: [PendingChange]
+    @AppStorage("autoCaptureEntryContext") private var autoCaptureEntryContext = false
 
     @State private var syncCoordinator = SyncCoordinator()
     @State private var healthCheckState = HealthCheckState.idle
@@ -25,6 +26,16 @@ struct SettingsView: View {
                     Text("Privacy")
                 } footer: {
                     Text("Require authentication to open the app. Your entries stay locked when Diary is in the background.")
+                }
+
+                Section {
+                    Toggle(isOn: $autoCaptureEntryContext) {
+                        Label("Add Context Automatically", systemImage: "location.magnifyingglass")
+                    }
+                } header: {
+                    Text("Entry Context")
+                } footer: {
+                    Text("New entries can automatically attach available location, weather, and activity context. Saving never waits for context capture.")
                 }
 
                 Section("Server") {

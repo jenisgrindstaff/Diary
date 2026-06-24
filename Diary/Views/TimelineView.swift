@@ -1128,6 +1128,7 @@ private struct QuickAppendView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @Environment(AppState.self) private var appState
+    @AppStorage("autoCaptureEntryContext") private var autoCaptureEntryContext = false
 
     let syncCoordinator: SyncCoordinator
 
@@ -1140,6 +1141,7 @@ private struct QuickAppendView: View {
     @State private var errorMessage: String?
     @State private var isConfirmingDiscard = false
     @State private var saveConfirmationCount = 0
+    @State private var hasAttemptedAutoContextCapture = false
     @FocusState private var isTextFocused: Bool
 
     init(syncCoordinator: SyncCoordinator) {
@@ -1232,6 +1234,7 @@ private struct QuickAppendView: View {
             .task {
                 await Task.yield()
                 isTextFocused = true
+                await autoCaptureContextIfNeeded(entryDate: .now)
             }
             .onChange(of: draftSnapshot) { _, draft in
                 QuickAppendDraftStore.save(draft)
@@ -1327,6 +1330,20 @@ private struct QuickAppendView: View {
         }
     }
 
+    private func autoCaptureContextIfNeeded(entryDate: Date) async {
+        guard autoCaptureEntryContext,
+              !hasAttemptedAutoContextCapture,
+              capturedContext.isEmpty else {
+            return
+        }
+
+        hasAttemptedAutoContextCapture = true
+        let captured = await DiaryContextCaptureService.capture(for: entryDate)
+        if !captured.context.isEmpty, capturedContext.isEmpty {
+            capturedContext = captured.context
+        }
+    }
+
     private func cancel() {
         guard hasDraftContent || hasTemporaryMedia else {
             dismiss()
@@ -1373,6 +1390,7 @@ private struct NewEntryView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.modelContext) private var modelContext
     @Environment(AppState.self) private var appState
+    @AppStorage("autoCaptureEntryContext") private var autoCaptureEntryContext = false
 
     let syncCoordinator: SyncCoordinator
 
@@ -1385,6 +1403,7 @@ private struct NewEntryView: View {
     @State private var isLoadingMedia = false
     @State private var errorMessage: String?
     @State private var isConfirmingMediaDiscard = false
+    @State private var hasAttemptedAutoContextCapture = false
 
     init(syncCoordinator: SyncCoordinator) {
         self.syncCoordinator = syncCoordinator
@@ -1464,6 +1483,9 @@ private struct NewEntryView: View {
             }
             .navigationTitle("New Entry")
             .navigationBarTitleDisplayMode(.inline)
+            .task {
+                await autoCaptureContextIfNeeded(entryDate: createdAt)
+            }
             .onChange(of: draftSnapshot) { _, draft in
                 NewEntryDraftStore.save(draft)
             }
@@ -1544,6 +1566,20 @@ private struct NewEntryView: View {
             dismiss()
         } catch {
             errorMessage = error.localizedDescription
+        }
+    }
+
+    private func autoCaptureContextIfNeeded(entryDate: Date) async {
+        guard autoCaptureEntryContext,
+              !hasAttemptedAutoContextCapture,
+              capturedContext.isEmpty else {
+            return
+        }
+
+        hasAttemptedAutoContextCapture = true
+        let captured = await DiaryContextCaptureService.capture(for: entryDate)
+        if !captured.context.isEmpty, capturedContext.isEmpty {
+            capturedContext = captured.context
         }
     }
 
