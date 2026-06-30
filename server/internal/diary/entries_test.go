@@ -58,6 +58,32 @@ func TestCreateEntryWritesCanonicalMarkdown(t *testing.T) {
 	}
 }
 
+func TestRawPhotoAttachmentHelpers(t *testing.T) {
+	attachment := Attachment{
+		Kind:        "image",
+		Filename:    "IMG_0001.DNG",
+		ContentType: "image/x-adobe-dng",
+	}
+
+	if KindForFilename(attachment.Filename) != "raw" {
+		t.Fatalf("expected DNG kind raw, got %q", KindForFilename(attachment.Filename))
+	}
+	if !IsRawPhotoAttachment(attachment) {
+		t.Fatal("expected DNG attachment to be treated as raw photo")
+	}
+	if IsBrowserImageAttachment(attachment) {
+		t.Fatal("DNG should not be rendered as a browser image")
+	}
+
+	jpeg := Attachment{Kind: "image", Filename: "photo.jpg", ContentType: "image/jpeg"}
+	if IsRawPhotoAttachment(jpeg) {
+		t.Fatal("JPEG should not be treated as raw")
+	}
+	if !IsBrowserImageAttachment(jpeg) {
+		t.Fatal("JPEG should render as a browser image")
+	}
+}
+
 func TestCreateEntryAppliesBirthdateDetails(t *testing.T) {
 	vault := t.TempDir()
 	peopleConfig := `people:

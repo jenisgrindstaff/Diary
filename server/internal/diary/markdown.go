@@ -24,6 +24,49 @@ var (
 	assetLink      = regexp.MustCompile(`!?\[[^\]]*]\(([^)]+)\)`)
 )
 
+var rawPhotoExtensions = map[string]struct{}{
+	".3fr": {},
+	".arw": {},
+	".cr2": {},
+	".cr3": {},
+	".dng": {},
+	".erf": {},
+	".kdc": {},
+	".mrw": {},
+	".nef": {},
+	".nrw": {},
+	".orf": {},
+	".pef": {},
+	".raf": {},
+	".raw": {},
+	".rw2": {},
+	".rwl": {},
+	".srw": {},
+}
+
+var browserImageExtensions = map[string]struct{}{
+	".avif": {},
+	".gif":  {},
+	".heic": {},
+	".heif": {},
+	".jpeg": {},
+	".jpg":  {},
+	".png":  {},
+	".svg":  {},
+	".webp": {},
+}
+
+var browserImageContentTypes = map[string]struct{}{
+	"image/avif":    {},
+	"image/gif":     {},
+	"image/heic":    {},
+	"image/heif":    {},
+	"image/jpeg":    {},
+	"image/png":     {},
+	"image/svg+xml": {},
+	"image/webp":    {},
+}
+
 type frontmatter struct {
 	ID             string          `yaml:"id"`
 	CreatedAt      time.Time       `yaml:"created_at"`
@@ -295,6 +338,9 @@ func ExtractLocalAssetRefs(body string) []string {
 }
 
 func KindForFilename(filename string) string {
+	if IsRawPhotoFilename(filename) {
+		return "raw"
+	}
 	contentType := mime.TypeByExtension(strings.ToLower(filepath.Ext(filename)))
 	switch {
 	case strings.HasPrefix(contentType, "image/"):
@@ -312,6 +358,38 @@ func ContentTypeForFilename(filename string) string {
 	}
 
 	return "application/octet-stream"
+}
+
+func IsRawPhotoFilename(filename string) bool {
+	_, ok := rawPhotoExtensions[strings.ToLower(filepath.Ext(filename))]
+	return ok
+}
+
+func IsRawPhotoAttachment(attachment Attachment) bool {
+	if IsRawPhotoFilename(attachment.Filename) || IsRawPhotoFilename(attachment.MarkdownPath) {
+		return true
+	}
+
+	contentType := strings.ToLower(strings.TrimSpace(attachment.ContentType))
+	return strings.Contains(contentType, "dng") || strings.Contains(contentType, "raw")
+}
+
+func IsBrowserImageAttachment(attachment Attachment) bool {
+	if IsRawPhotoAttachment(attachment) {
+		return false
+	}
+
+	if _, ok := browserImageExtensions[strings.ToLower(filepath.Ext(attachment.Filename))]; ok {
+		return true
+	}
+	if _, ok := browserImageExtensions[strings.ToLower(filepath.Ext(attachment.MarkdownPath))]; ok {
+		return true
+	}
+	if _, ok := browserImageContentTypes[strings.ToLower(strings.TrimSpace(attachment.ContentType))]; ok {
+		return true
+	}
+
+	return attachment.Kind == "image" && !strings.HasPrefix(strings.ToLower(strings.TrimSpace(attachment.ContentType)), "image/")
 }
 
 func isMarkdown(path string) bool {

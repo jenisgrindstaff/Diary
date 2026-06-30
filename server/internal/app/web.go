@@ -750,6 +750,8 @@ var pageTemplate = template.Must(template.New("pages").Funcs(template.FuncMap{
 	"webAsset": func(asset diary.Attachment) string {
 		return "/assets/" + url.PathEscape(asset.ID)
 	},
+	"webImage": diary.IsBrowserImageAttachment,
+	"rawPhoto": diary.IsRawPhotoAttachment,
 }).Parse(pageTemplates))
 
 const pageTemplates = `
@@ -980,6 +982,36 @@ const pageTemplates = `
       padding: 12px;
       color: var(--text);
       overflow-wrap: anywhere;
+    }
+    .media-file {
+      min-height: 160px;
+      display: grid !important;
+      align-content: center;
+      justify-items: center;
+      gap: 10px;
+      text-align: center;
+      text-decoration: none;
+    }
+    .media-file strong {
+      display: block;
+    }
+    .media-file small {
+      display: block;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .media-file-icon {
+      display: inline-grid;
+      place-items: center;
+      min-width: 58px;
+      height: 38px;
+      padding: 0 10px;
+      border-radius: 999px;
+      background: var(--accent-weak);
+      color: var(--accent);
+      font-weight: 800;
+      letter-spacing: .08em;
+      font-size: 12px;
     }
     .media-caption {
       margin: 0;
@@ -1287,7 +1319,7 @@ const pageTemplates = `
   </label>
   {{if .AllowMedia}}
     <label>Media
-      <input id="media-input" type="file" name="media" multiple accept="image/*,video/*,.pdf,.txt,.md,.markdown">
+      <input id="media-input" type="file" name="media" multiple accept="image/*,video/*,.dng,.raw,.arw,.cr2,.cr3,.nef,.nrw,.orf,.rw2,.raf,.pef,.srw,.pdf,.txt,.md,.markdown">
       <span id="drop-note" class="muted"></span>
     </label>
   {{end}}
@@ -1342,12 +1374,17 @@ const pageTemplates = `
       <div class="media-grid">
         {{range .Entry.Attachments}}
           <figure class="media-item">
-            {{if eq .Kind "image"}}
+            {{if webImage .}}
               <img src="{{webAsset .}}" alt="{{.Filename}}" loading="lazy">
             {{else if eq .Kind "video"}}
               <video src="{{webAsset .}}" controls preload="metadata"></video>
+            {{else if rawPhoto .}}
+              <a class="media-file media-raw" href="{{webAsset .}}" download>
+                <span class="media-file-icon">RAW</span>
+                <span><strong>RAW photo</strong><small>Download to view or edit</small></span>
+              </a>
             {{else}}
-              <a href="{{webAsset .}}">{{.Filename}}</a>
+              <a class="media-file" href="{{webAsset .}}" download>{{.Filename}}</a>
             {{end}}
             <figcaption class="media-caption">{{.Filename}}</figcaption>
           </figure>
@@ -1358,7 +1395,7 @@ const pageTemplates = `
   <form class="attach-form" method="post" action="/entries/{{.Entry.ID}}/attachments" enctype="multipart/form-data">
     <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
     <h2>Add Media</h2>
-    <input type="file" name="media" multiple accept="image/*,video/*,.pdf,.txt,.md,.markdown">
+    <input type="file" name="media" multiple accept="image/*,video/*,.dng,.raw,.arw,.cr2,.cr3,.nef,.nrw,.orf,.rw2,.raf,.pef,.srw,.pdf,.txt,.md,.markdown">
     <button class="primary" type="submit">Attach</button>
   </form>
   <div class="body rendered-markdown">{{.BodyHTML}}</div>
@@ -1396,12 +1433,17 @@ const pageTemplates = `
       <div class="media-grid">
         {{range .Entry.Attachments}}
           <figure class="media-item">
-            {{if eq .Kind "image"}}
+            {{if webImage .}}
               <img src="{{webAsset .}}" alt="{{.Filename}}" loading="lazy">
             {{else if eq .Kind "video"}}
               <video src="{{webAsset .}}" controls preload="metadata"></video>
+            {{else if rawPhoto .}}
+              <a class="media-file media-raw" href="{{webAsset .}}" download>
+                <span class="media-file-icon">RAW</span>
+                <span><strong>RAW photo</strong><small>Download to view or edit</small></span>
+              </a>
             {{else}}
-              <a href="{{webAsset .}}">{{.Filename}}</a>
+              <a class="media-file" href="{{webAsset .}}" download>{{.Filename}}</a>
             {{end}}
             <figcaption class="media-caption">{{.Filename}}</figcaption>
           </figure>

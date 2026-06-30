@@ -844,6 +844,9 @@ func TestNewEntryPageRendersForm(t *testing.T) {
 	if !strings.Contains(body, `enctype="multipart/form-data"`) || !strings.Contains(body, `name="media"`) {
 		t.Fatalf("expected media input on new entry form:\n%s", body)
 	}
+	if !strings.Contains(body, ".dng") {
+		t.Fatalf("expected raw photo extensions on media input:\n%s", body)
+	}
 }
 
 func TestCreateEntryRedirectsToDetail(t *testing.T) {
@@ -1114,6 +1117,49 @@ func TestWebEntryDetailRendersMedia(t *testing.T) {
 		if !strings.Contains(body, "/assets/"+attachment.ID) {
 			t.Fatalf("expected web asset path for %s:\n%s", attachment.ID, body)
 		}
+	}
+}
+
+func TestWebEntryDetailRendersDNGAsRawDownload(t *testing.T) {
+	srv := testServerWithImport(t)
+	defer srv.Close()
+
+	entries, err := srv.store.Entries()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("expected imported entries")
+	}
+
+	updated, attachment, err := diary.AttachFile(
+		srv.cfg.VaultDir,
+		entries[0],
+		"IMG_0001.DNG",
+		"image/x-adobe-dng",
+		strings.NewReader("fake raw bytes"),
+		time.Date(2026, 6, 24, 15, 30, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.indexEntry(updated.VaultPath); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/entries/"+updated.ID, nil)
+	rec := httptest.NewRecorder()
+	srv.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("detail status %d body %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "RAW photo") || !strings.Contains(body, `href="/assets/`+attachment.ID+`"`) || !strings.Contains(body, "IMG_0001.DNG") {
+		t.Fatalf("expected raw download tile:\n%s", body)
+	}
+	if strings.Contains(body, `<img src="/assets/`+attachment.ID+`"`) {
+		t.Fatalf("DNG should not render as an img tag:\n%s", body)
 	}
 }
 
